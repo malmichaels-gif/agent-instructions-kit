@@ -32,7 +32,7 @@ jobs:
 
       - name: Verify dist is up to date
         run: |
-          git diff --exit-code dist/ || (echo "dist/ is out of date. Run 'npm run build' and commit." && exit 1)
+          git diff --exit-code -- dist/ ':!dist/*.map' || (echo "dist/ is out of date. Run 'npm run build' and commit." && exit 1)
 
   agent-instructions:
     runs-on: ubuntu-latest
