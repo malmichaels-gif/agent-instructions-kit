@@ -1,6 +1,6 @@
 name: 'Agent Instructions Kit'
 description: 'Check and lint your AGENTS.md and CLAUDE.md files for consistency and safety'
-author: 'HeyTC Labs'
+author: 'HeyTC'
 
 branding:
   icon: 'shield'
