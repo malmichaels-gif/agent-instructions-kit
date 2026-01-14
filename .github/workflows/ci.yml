@@ -33,3 +33,14 @@ jobs:
       - name: Verify dist is up to date
         run: |
           git diff --exit-code dist/ || (echo "dist/ is out of date. Run 'npm run build' and commit." && exit 1)
+
+  agent-instructions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check agent instructions (dogfood)
+        uses: malmichaels-gif/agent-instructions-kit@v0
+        with:
+          mode: "all"
+          fail_on_safety: "false"

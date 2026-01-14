@@ -1,0 +1,21 @@
+name: Weekly Community Digest
+
+on:
+  schedule:
+    - cron: "0 16 * * 1" # Mondays 16:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: read
+  discussions: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post weekly digest
+        uses: malmichaels-gif/community-digest-action@v0
+        with:
+          discussion_category: "Announcements"
+          min_activity: "1"  # TODO: Change to 3 after first successful post
