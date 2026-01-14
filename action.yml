@@ -1,0 +1,41 @@
+name: 'Agent Instructions Kit'
+description: 'Check and lint your AGENTS.md and CLAUDE.md files for consistency and safety'
+author: 'HeyTC Labs'
+
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  mode:
+    description: 'Mode to run: check, safety, or all'
+    required: false
+    default: 'check'
+  template:
+    description: 'Template flavor for init: minimal or opinionated'
+    required: false
+    default: 'minimal'
+  fail_on_safety:
+    description: 'Fail CI if safety rules are triggered'
+    required: false
+    default: 'false'
+  agents_path:
+    description: 'Path to AGENTS.md file'
+    required: false
+    default: 'AGENTS.md'
+  claude_path:
+    description: 'Path to CLAUDE.md file'
+    required: false
+    default: 'CLAUDE.md'
+
+outputs:
+  check_passed:
+    description: 'Whether the check passed (true/false)'
+  safety_passed:
+    description: 'Whether safety check passed (true/false)'
+  warnings:
+    description: 'Number of safety warnings found'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

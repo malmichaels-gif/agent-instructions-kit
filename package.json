@@ -1,0 +1,47 @@
+{
+  "name": "agent-instructions-kit",
+  "version": "0.1.0",
+  "description": "Keep your repo's agent instructions consistent and safe",
+  "main": "dist/index.js",
+  "bin": {
+    "agent-instructions-kit": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "ncc build src/index.ts -o dist --source-map --license licenses.txt",
+    "build:cli": "ncc build src/cli.ts -o dist --source-map",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "lint:fix": "eslint src --ext .ts --fix",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "github-action",
+    "agents",
+    "claude",
+    "ai",
+    "instructions",
+    "lint",
+    "safety"
+  ],
+  "author": "malmichaels-gif",
+  "license": "MIT",
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "@actions/github": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@vercel/ncc": "^0.38.1",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^2.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
