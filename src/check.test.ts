@@ -12,8 +12,12 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (fs.existsSync(TEST_DIR)) {
-    fs.rmSync(TEST_DIR, { recursive: true });
+  try {
+    if (fs.existsSync(TEST_DIR)) {
+      fs.rmSync(TEST_DIR, { recursive: true });
+    }
+  } catch {
+    // Ignore cleanup errors
   }
 });
 
