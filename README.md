@@ -1,6 +1,7 @@
 # agent-instructions-kit
 
 [![CI](https://github.com/malmichaels-gif/agent-instructions-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/malmichaels-gif/agent-instructions-kit/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/malmichaels-gif/agent-instructions-kit)](https://github.com/malmichaels-gif/agent-instructions-kit/releases)
 
 Agent instructions that won't embarrass you.
 
