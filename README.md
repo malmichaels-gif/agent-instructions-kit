@@ -15,6 +15,10 @@ It's deliberately simple:
 - `check` enforces required sections
 - `safety` warns or fails CI (your choice)
 
+<p align="center">
+  <img src="docs/images/safety-check.png" alt="Safety check catching a prompt injection attempt" width="700">
+</p>
+
 ---
 
 ## Why this exists
