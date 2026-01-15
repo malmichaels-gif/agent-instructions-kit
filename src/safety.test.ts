@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { runSafetyCheck } from './safety.js';
 
-const TEST_DIR = './test-fixtures';
+const TEST_DIR = './test-fixtures-safety';
 
 beforeEach(() => {
   if (!fs.existsSync(TEST_DIR)) {

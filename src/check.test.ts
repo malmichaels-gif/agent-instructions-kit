@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { checkAgentsFile, checkClaudeFile } from './check.js';
 
-const TEST_DIR = './test-fixtures';
+const TEST_DIR = './test-fixtures-check';
 
 beforeEach(() => {
   if (!fs.existsSync(TEST_DIR)) {
