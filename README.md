@@ -5,6 +5,8 @@
 
 Agent instructions that won't embarrass you.
 
+Generates the instruction files AI coding tools depend on—consistent, up-to-date, and free of security traps.
+
 This repo helps you add and maintain:
 - **AGENTS.md** (source of truth)
 - **CLAUDE.md** (generated or synced)
