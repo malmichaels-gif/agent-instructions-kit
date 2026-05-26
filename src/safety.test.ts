@@ -107,6 +107,59 @@ Build a great app.
     const result = runSafetyCheck(filePath);
     expect(result.findings.some((f) => f.ruleId === 'webhook-exfil')).toBe(true);
   });
+
+  it('detects ambiguous hedge words', () => {
+    const filePath = path.join(TEST_DIR, 'hedge.md');
+    fs.writeFileSync(filePath, 'Try to keep functions small where possible.');
+    const result = runSafetyCheck(filePath);
+    expect(result.findings.some((f) => f.ruleId === 'ambiguous-hedge')).toBe(true);
+  });
+
+  it('detects vague persona instructions', () => {
+    const filePath = path.join(TEST_DIR, 'persona.md');
+    fs.writeFileSync(filePath, 'You are a helpful assistant that writes code.');
+    const result = runSafetyCheck(filePath);
+    expect(result.findings.some((f) => f.ruleId === 'vague-persona')).toBe(true);
+  });
+
+  it('detects AWS access keys', () => {
+    const filePath = path.join(TEST_DIR, 'aws.md');
+    fs.writeFileSync(filePath, 'Use key AKIAIOSFODNN7EXAMPLE for access.');
+    const result = runSafetyCheck(filePath);
+    expect(result.passed).toBe(false);
+    expect(result.findings.some((f) => f.ruleId === 'leaked-aws-key')).toBe(true);
+  });
+
+  it('detects hardcoded API keys', () => {
+    const filePath = path.join(TEST_DIR, 'apikey.md');
+    fs.writeFileSync(filePath, 'api_key: "sk-1234567890abcdefghijklmnop"');
+    const result = runSafetyCheck(filePath);
+    expect(result.passed).toBe(false);
+    expect(result.findings.some((f) => f.ruleId === 'leaked-generic-secret')).toBe(true);
+  });
+
+  it('detects private keys', () => {
+    const filePath = path.join(TEST_DIR, 'privkey.md');
+    fs.writeFileSync(filePath, '-----BEGIN RSA PRIVATE KEY-----\nMIIE...');
+    const result = runSafetyCheck(filePath);
+    expect(result.passed).toBe(false);
+    expect(result.findings.some((f) => f.ruleId === 'leaked-private-key')).toBe(true);
+  });
+
+  it('detects JWT tokens', () => {
+    const filePath = path.join(TEST_DIR, 'jwt.md');
+    fs.writeFileSync(filePath, 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U');
+    const result = runSafetyCheck(filePath);
+    expect(result.passed).toBe(false);
+    expect(result.findings.some((f) => f.ruleId === 'leaked-jwt')).toBe(true);
+  });
+
+  it('does not flag clean instruction text as ambiguous', () => {
+    const filePath = path.join(TEST_DIR, 'clear.md');
+    fs.writeFileSync(filePath, '## Rules\n- Run `npm test` before every commit\n- Never skip linting');
+    const result = runSafetyCheck(filePath);
+    expect(result.findings.some((f) => f.ruleId === 'ambiguous-hedge')).toBe(false);
+  });
 });
 
 describe('aikignore', () => {

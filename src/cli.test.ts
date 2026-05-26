@@ -57,7 +57,7 @@ describe('CLI integration', () => {
     const { exitCode } = run(['init', '--template', 'opinionated']);
     expect(exitCode).toBe(0);
     const content = fs.readFileSync(path.join(TEST_DIR, 'AGENTS.md'), 'utf-8');
-    expect(content).toContain('What NOT to do');
+    expect(content).toContain('Boundaries: always, ask first, never');
   });
 
   it('init fails if files already exist', () => {

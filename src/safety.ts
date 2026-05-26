@@ -74,6 +74,42 @@ const SAFETY_RULES: SafetyRule[] = [
     message: 'Suspicious pattern: instructions hidden in HTML comments',
     severity: 'error',
   },
+  {
+    id: 'ambiguous-hedge',
+    pattern: /\b(try to|where possible|if appropriate|when feasible|as needed|be careful|consider|ideally|optionally)\b/i,
+    message: 'Ambiguous hedge word — agents default to non-interactive behavior when instructions are vague (ICLR 2026). Use concrete, verifiable language instead',
+    severity: 'warn',
+  },
+  {
+    id: 'vague-persona',
+    pattern: /you\s+are\s+a?\s*(helpful|friendly|smart|intelligent|skilled)\s+(assistant|coder|developer|helper)/i,
+    message: 'Vague persona instruction — generic roles degrade agent performance. Define specific responsibilities instead',
+    severity: 'warn',
+  },
+  {
+    id: 'leaked-aws-key',
+    pattern: /AKIA[0-9A-Z]{16}/,
+    message: 'Potential AWS access key detected',
+    severity: 'error',
+  },
+  {
+    id: 'leaked-generic-secret',
+    pattern: /(api[_-]?key|api[_-]?secret|auth[_-]?token|access[_-]?token|secret[_-]?key)\s*[:=]\s*["']?[A-Za-z0-9+/=_-]{20,}/i,
+    message: 'Potential hardcoded secret or API key detected',
+    severity: 'error',
+  },
+  {
+    id: 'leaked-private-key',
+    pattern: /-----BEGIN\s+(RSA|EC|DSA|OPENSSH|PGP)?\s*PRIVATE KEY-----/i,
+    message: 'Private key detected in instruction file',
+    severity: 'error',
+  },
+  {
+    id: 'leaked-jwt',
+    pattern: /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
+    message: 'JWT token detected in instruction file',
+    severity: 'error',
+  },
 ];
 
 function loadIgnoredRules(ignorePath: string): Set<string> {

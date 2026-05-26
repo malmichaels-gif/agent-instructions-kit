@@ -13,8 +13,8 @@ This repo helps you add and maintain:
 - a lightweight **safety lint** for instruction-file nonsense (prompt-injection-y stuff)
 
 It's deliberately simple:
-- `init` generates files
-- `check` enforces required sections
+- `init` generates files (informed by [Karpathy's principles](https://lucaberton.com/blog/karpathy-claude-md-llm-coding-principles-2026/) and [Boris Cherny's workflow](https://howborisusesclaudecode.com/))
+- `check` enforces required sections + quality signals
 - `safety` warns or fails CI (your choice)
 
 <p align="center">
@@ -85,8 +85,8 @@ jobs:
 
 You get two template flavors:
 
-* **minimal**: just the essentials (setup, tests, style, PR rules)
-* **opinionated**: adds security notes, "what not to do", and guardrails
+* **minimal**: essentials — mission, stack, commands, verification, boundaries
+* **opinionated**: adds Karpathy's four principles (think-first, simplicity, surgical changes, verify-don't-trust), boundary tiers (always/ask first/never), a "when to stop and ask" decision framework, and exit-code-based verification
 
 Example:
 
@@ -104,11 +104,14 @@ Generates AGENTS.md + CLAUDE.md using a single template source.
 
 ### `check`
 
-Validates:
+Validates required sections and quality signals from [2,500+ real-world repos](https://github.blog/ai-and-ml/github-copilot/how-to-write-a-great-agents-md-lessons-from-over-2500-repositories/):
 
-* required sections exist
-* basic formatting is sane
-* files are not empty placeholders
+* required sections exist (Mission, Local dev commands)
+* recommended sections present (Verification, Boundaries)
+* file length is sane (<150 lines ideal, >300 warns hard)
+* boundary constraints exist ("never", "don't" — agents need explicit limits)
+* sections have executable commands (prose-only sections degrade performance)
+* CLAUDE.md is consistent with AGENTS.md (cross-file contradiction check)
 
 ### `safety`
 
@@ -126,10 +129,16 @@ Flags suspicious patterns commonly used for instruction hijacking or bad behavio
 | `new-identity`         | error    | Agent identity hijacking                   | "you are now", "forget you are"            |
 | `hidden-instructions`  | error    | Malicious HTML comments                    | `<!-- ignore all rules -->`                |
 | `mcp-tool-abuse`       | error    | Destructive MCP tool calls                 | "use_mcp_tool to delete"                   |
+| `leaked-aws-key`       | error    | AWS access keys in markdown                | `AKIAIOSFODNN7EXAMPLE`                     |
+| `leaked-generic-secret`| error    | Hardcoded API keys / tokens                | `api_key: "sk-1234..."`                    |
+| `leaked-private-key`   | error    | Private keys in markdown                   | `-----BEGIN RSA PRIVATE KEY-----`          |
+| `leaked-jwt`           | error    | JWT tokens in markdown                     | `eyJhbG...`                                |
 | `curl-bash`            | warn     | Piping untrusted URLs to shell             | `curl https://... \| bash`                 |
 | `disable-security`     | warn     | Disabling security controls                | "disable verification", "disable checks"   |
 | `base64-obfuscation`   | warn     | Encoded/obfuscated payloads                | "base64 decode", "eval(atob(...))"         |
 | `webhook-exfil`        | warn     | Sending data to external services          | "send to webhook", "post data to http"     |
+| `ambiguous-hedge`      | warn     | Vague instructions that degrade performance| "try to", "where possible", "if appropriate"|
+| `vague-persona`        | warn     | Generic role definitions                   | "you are a helpful assistant"              |
 
 Rules with severity **error** cause `safety` to report `passed: false`. Rules with severity **warn** are reported but don't fail the check.
 
