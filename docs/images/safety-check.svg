@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="340" font-family="'SF Mono','Cascadia Code','Consolas','Liberation Mono',monospace" font-size="14">
+  <rect width="720" height="340" rx="10" fill="#1e1e2e"/>
+  <g fill="#cdd6f4">
+    <!-- Window dots -->
+    <circle cx="20" cy="18" r="6" fill="#f38ba8"/>
+    <circle cx="38" cy="18" r="6" fill="#f9e2af"/>
+    <circle cx="56" cy="18" r="6" fill="#a6e3a1"/>
+    <text x="310" y="22" text-anchor="middle" fill="#6c7086" font-size="12">agent-instructions-kit safety</text>
+  </g>
+  <g font-size="13" fill="#cdd6f4">
+    <text x="20" y="58" fill="#89b4fa">$</text>
+    <text x="34" y="58">npx agent-instructions-kit safety --agents AGENTS.md</text>
+
+    <text x="20" y="88" fill="#6c7086">Running safety check on AGENTS.md...</text>
+
+    <text x="20" y="118" fill="#f38ba8">  ERROR</text>
+    <text x="80" y="118" fill="#f9e2af">[ignore-instructions]</text>
+    <text x="260" y="118">Line 11: Prompt injection attempt</text>
+
+    <text x="20" y="144" fill="#f38ba8">  ERROR</text>
+    <text x="80" y="144" fill="#f9e2af">[print-secrets]</text>
+    <text x="228" y="144">Line 11: Asking to print secrets</text>
+
+    <text x="20" y="170" fill="#f38ba8">  ERROR</text>
+    <text x="80" y="170" fill="#f9e2af">[new-identity]</text>
+    <text x="224" y="170">Line 12: Identity override attempt</text>
+
+    <text x="20" y="196" fill="#f38ba8">  ERROR</text>
+    <text x="80" y="196" fill="#f9e2af">[override-instructions]</text>
+    <text x="280" y="196">Line 13: Overriding system prompts</text>
+
+    <text x="20" y="222" fill="#f38ba8">  ERROR</text>
+    <text x="80" y="222" fill="#f9e2af">[leaked-generic-secret]</text>
+    <text x="284" y="222">Line 14: Hardcoded API key detected</text>
+
+    <text x="20" y="262" fill="#f9e2af">5 finding(s).</text>
+  </g>
+</svg>

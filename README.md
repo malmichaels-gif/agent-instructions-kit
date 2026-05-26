@@ -18,7 +18,11 @@ It's deliberately simple:
 - `safety` warns or fails CI (your choice)
 
 <p align="center">
-  <img src="docs/images/safety-check.png" alt="Safety check catching a prompt injection attempt" width="700">
+  <img src="docs/images/score-output.svg" alt="Score command grading instruction files A through F" width="600">
+</p>
+
+<p align="center">
+  <img src="docs/images/safety-check.svg" alt="Safety check catching prompt injection, leaked secrets, and identity override" width="700">
 </p>
 
 ---

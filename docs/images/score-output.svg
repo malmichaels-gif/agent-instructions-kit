@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="620" height="340" font-family="'SF Mono','Cascadia Code','Consolas','Liberation Mono',monospace" font-size="14">
+  <rect width="620" height="340" rx="10" fill="#1e1e2e"/>
+  <g fill="#cdd6f4">
+    <!-- Window dots -->
+    <circle cx="20" cy="18" r="6" fill="#f38ba8"/>
+    <circle cx="38" cy="18" r="6" fill="#f9e2af"/>
+    <circle cx="56" cy="18" r="6" fill="#a6e3a1"/>
+    <text x="260" y="22" text-anchor="middle" fill="#6c7086" font-size="12">agent-instructions-kit score</text>
+  </g>
+  <g font-size="14" fill="#cdd6f4">
+    <text x="20" y="58" fill="#89b4fa">$</text>
+    <text x="34" y="58">npx agent-instructions-kit score</text>
+
+    <text x="20" y="98" fill="#a6e3a1" font-size="18" font-weight="bold">Grade: A</text>
+    <text x="115" y="98" fill="#6c7086" font-size="18">  (97/100)</text>
+
+    <text x="20" y="138" fill="#f9e2af">  Structure:</text>
+    <text x="140" y="138">27</text>
+    <text x="20" y="162" fill="#f9e2af">  Safety:</text>
+    <text x="140" y="162">30</text>
+    <text x="20" y="186" fill="#f9e2af">  Clarity:</text>
+    <text x="140" y="186">20</text>
+    <text x="20" y="210" fill="#f9e2af">  Consistency:</text>
+    <text x="140" y="210">20</text>
+
+    <text x="20" y="250" fill="#89b4fa">Suggestions:</text>
+    <text x="20" y="274" fill="#6c7086">  - Add a Verification section with concrete</text>
+    <text x="20" y="294" fill="#6c7086">    exit criteria</text>
+  </g>
+</svg>
