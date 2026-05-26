@@ -24,6 +24,9 @@ pnpm-debug.log*
 # Test coverage
 coverage/
 
+# Declaration source maps (contain absolute paths, differ per machine)
+dist/**/*.d.ts.map
+
 # Temporary files
 *.tmp
 *.temp
