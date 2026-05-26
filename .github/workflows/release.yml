@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -16,9 +17,9 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
 
       - run: npm install
       - run: npm test
@@ -29,10 +30,8 @@ jobs:
         with:
           generate_release_notes: true
 
-      - name: Publish to npm
+      - name: Publish to npm (trusted publishing)
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Update major version tag
         run: |

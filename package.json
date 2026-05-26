@@ -27,6 +27,10 @@
     "lint",
     "safety"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/malmichaels-gif/agent-instructions-kit.git"
+  },
   "author": "malmichaels-gif",
   "license": "MIT",
   "dependencies": {
