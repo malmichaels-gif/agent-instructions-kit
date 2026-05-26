@@ -238,13 +238,13 @@ describe('checkClaudeFile', () => {
   it('warns on cross-file contradiction', () => {
     const agentsPath = writeAgents('AGENTS.md', `# AGENTS.md
 
-## Safety rules
-- Never log secrets
+## Logging
+- Always log request details
 `);
     const claudePath = writeAgents('CLAUDE.md', `Follow AGENTS.md exactly.
 
-## Safety rules
-- Log everything for debugging
+## Logging
+- Never log request details
 `);
     const result = checkClaudeFile(claudePath, agentsPath);
     expect(result.warnings.some((w) => w.includes('contradict'))).toBe(true);

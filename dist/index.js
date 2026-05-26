@@ -25716,7 +25716,8 @@ function checkAgentsFile(filePath) {
         };
     }
     for (const section of REQUIRED_SECTIONS) {
-        const pattern = new RegExp(`^##\\s+${section}`, 'mi');
+        const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`^##\\s+${escaped}`, 'mi');
         if (!pattern.test(content)) {
             errors.push(`Missing required section: "${section}"`);
         }
@@ -25758,21 +25759,21 @@ function checkAgentsFile(filePath) {
         warnings,
     };
 }
-function checkClaudeFile(path, agentsPath) {
+function checkClaudeFile(filePath, agentsPath) {
     const errors = [];
     const warnings = [];
-    if (!fs.existsSync(path)) {
+    if (!fs.existsSync(filePath)) {
         return {
             passed: false,
-            errors: [`File not found: ${path}`],
+            errors: [`File not found: ${filePath}`],
             warnings: [],
         };
     }
-    const content = fs.readFileSync(path, 'utf-8');
+    const content = fs.readFileSync(filePath, 'utf-8');
     if (content.trim().length === 0) {
         return {
             passed: false,
-            errors: [`File is empty: ${path}`],
+            errors: [`File is empty: ${filePath}`],
             warnings: [],
         };
     }
@@ -25846,11 +25847,20 @@ function getSectionBody(content, heading) {
     return section ? section.body.trim() : null;
 }
 function hasContradiction(bodyA, bodyB) {
-    const negationPattern = /\b(never|don'?t|do not|must not|shall not|forbidden|prohibited)\b/gi;
-    const negationsA = [...bodyA.matchAll(negationPattern)].map((m) => m[0].toLowerCase());
-    const negationsB = [...bodyB.matchAll(negationPattern)].map((m) => m[0].toLowerCase());
-    if ((negationsA.length > 0) !== (negationsB.length > 0))
-        return true;
+    const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+    const wordsA = new Set(normalize(bodyA));
+    const wordsB = new Set(normalize(bodyB));
+    const opposites = [
+        ['always', 'never'],
+        ['allow', 'forbid'],
+        ['allow', 'prohibited'],
+        ['enable', 'disable'],
+        ['require', 'optional'],
+    ];
+    for (const [a, b] of opposites) {
+        if ((wordsA.has(a) && wordsB.has(b)) || (wordsA.has(b) && wordsB.has(a)))
+            return true;
+    }
     return false;
 }
 const NPM_SCRIPT_PATTERN = /npm\s+(run\s+)?(\w[\w-]*)/g;
@@ -25865,10 +25875,10 @@ function validateCommands(content, dir) {
             for (const match of content.matchAll(NPM_SCRIPT_PATTERN)) {
                 const hasRun = !!match[1];
                 const script = match[2];
-                if (!hasRun && builtins.has(script))
+                if (builtins.has(script))
                     continue;
-                if (hasRun && !scripts[script]) {
-                    broken.push(`npm run ${script}`);
+                if (!scripts[script]) {
+                    broken.push(hasRun ? `npm run ${script}` : `npm ${script}`);
                 }
             }
         }
@@ -25934,40 +25944,34 @@ const score_js_1 = __nccwpck_require__(9);
 async function run() {
     try {
         const config = getConfig();
+        const agentsResult = (0, check_js_1.checkAgentsFile)(config.agentsPath);
+        const claudeResult = (0, check_js_1.checkClaudeFile)(config.claudePath, config.agentsPath);
+        const safetyResult = (0, safety_js_1.runSafetyCheck)(config.agentsPath);
         let checkPassed = true;
         let safetyPassed = true;
         let totalWarnings = 0;
-        // Run check
         if (config.mode === 'check' || config.mode === 'all') {
             core.info(`Checking ${config.agentsPath}...`);
-            const agentsResult = (0, check_js_1.checkAgentsFile)(config.agentsPath);
-            for (const error of agentsResult.errors) {
+            for (const error of agentsResult.errors)
                 core.error(error);
-            }
             for (const warning of agentsResult.warnings) {
                 core.warning(warning);
                 totalWarnings++;
             }
-            if (!agentsResult.passed) {
+            if (!agentsResult.passed)
                 checkPassed = false;
-            }
             core.info(`Checking ${config.claudePath}...`);
-            const claudeResult = (0, check_js_1.checkClaudeFile)(config.claudePath, config.agentsPath);
-            for (const error of claudeResult.errors) {
+            for (const error of claudeResult.errors)
                 core.error(error);
-            }
             for (const warning of claudeResult.warnings) {
                 core.warning(warning);
                 totalWarnings++;
             }
-            if (!claudeResult.passed) {
+            if (!claudeResult.passed)
                 checkPassed = false;
-            }
         }
-        // Run safety
         if (config.mode === 'safety' || config.mode === 'all') {
             core.info(`Running safety check on ${config.agentsPath}...`);
-            const safetyResult = (0, safety_js_1.runSafetyCheck)(config.agentsPath);
             for (const finding of safetyResult.findings) {
                 const msg = `[${finding.ruleId}] Line ${finding.line}: ${finding.message}`;
                 if (finding.severity === 'error') {
@@ -25983,16 +25987,12 @@ async function run() {
                 }
                 totalWarnings++;
             }
-            if (!safetyResult.passed && config.failOnSafety) {
+            if (!safetyResult.passed && config.failOnSafety)
                 safetyPassed = false;
-            }
         }
-        const agentsResult = (0, check_js_1.checkAgentsFile)(config.agentsPath);
-        const claudeResult = (0, check_js_1.checkClaudeFile)(config.claudePath, config.agentsPath);
-        const safetyResult = (0, safety_js_1.runSafetyCheck)(config.agentsPath);
         const scoreResult = (0, score_js_1.computeScore)(agentsResult, claudeResult, safetyResult);
-        core.setOutput('check_passed', checkPassed.toString());
-        core.setOutput('safety_passed', safetyPassed.toString());
+        core.setOutput('check_passed', (config.mode === 'check' || config.mode === 'all') ? checkPassed.toString() : 'skipped');
+        core.setOutput('safety_passed', (config.mode === 'safety' || config.mode === 'all') ? safetyPassed.toString() : 'skipped');
         core.setOutput('warnings', totalWarnings.toString());
         core.setOutput('score', scoreResult.score.toString());
         core.setOutput('grade', scoreResult.grade);
@@ -26155,7 +26155,7 @@ const SAFETY_RULES = [
     },
     {
         id: 'ambiguous-hedge',
-        pattern: /\b(try to|where possible|if appropriate|when feasible|as needed|be careful|consider|ideally|optionally)\b/i,
+        pattern: /\b(try to|where possible|if appropriate|when feasible|as needed|be careful|ideally|optionally)\b/i,
         message: 'Ambiguous hedge word — agents default to non-interactive behavior when instructions are vague (ICLR 2026). Use concrete, verifiable language instead',
         severity: 'warn',
     },
@@ -26243,6 +26243,7 @@ function getSafetyRules() {
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.computeScore = computeScore;
+const CLARITY_RULE_IDS = new Set(['ambiguous-hedge', 'vague-persona']);
 function computeScore(agentsCheck, claudeCheck, safetyResult) {
     const breakdown = {};
     const suggestions = [];
@@ -26265,7 +26266,7 @@ function computeScore(agentsCheck, claudeCheck, safetyResult) {
     breakdown['Structure'] = Math.max(0, structurePoints);
     let safetyPoints = 30;
     const errors = safetyResult.findings.filter((f) => f.severity === 'error');
-    const warns = safetyResult.findings.filter((f) => f.severity === 'warn');
+    const warns = safetyResult.findings.filter((f) => f.severity === 'warn' && !CLARITY_RULE_IDS.has(f.ruleId));
     safetyPoints -= errors.length * 10;
     safetyPoints -= warns.length * 3;
     if (errors.length > 0)
@@ -26276,7 +26277,8 @@ function computeScore(agentsCheck, claudeCheck, safetyResult) {
     let clarityPoints = 20;
     const lengthWarning = agentsCheck.warnings.find((w) => w.includes('lines'));
     if (lengthWarning) {
-        clarityPoints -= lengthWarning.includes('300') ? 10 : 5;
+        const isHardWarn = />\s*300\)/.test(lengthWarning);
+        clarityPoints -= isHardWarn ? 10 : 5;
         suggestions.push('Trim instruction file — shorter files correlate with better agent performance');
     }
     const ambiguityFindings = safetyResult.findings.filter((f) => f.ruleId === 'ambiguous-hedge');

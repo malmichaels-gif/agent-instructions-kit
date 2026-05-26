@@ -76,7 +76,7 @@ const SAFETY_RULES: SafetyRule[] = [
   },
   {
     id: 'ambiguous-hedge',
-    pattern: /\b(try to|where possible|if appropriate|when feasible|as needed|be careful|consider|ideally|optionally)\b/i,
+    pattern: /\b(try to|where possible|if appropriate|when feasible|as needed|be careful|ideally|optionally)\b/i,
     message: 'Ambiguous hedge word — agents default to non-interactive behavior when instructions are vague (ICLR 2026). Use concrete, verifiable language instead',
     severity: 'warn',
   },

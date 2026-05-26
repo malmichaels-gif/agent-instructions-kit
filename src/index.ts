@@ -8,48 +8,34 @@ async function run(): Promise<void> {
   try {
     const config = getConfig();
 
+    const agentsResult = checkAgentsFile(config.agentsPath);
+    const claudeResult = checkClaudeFile(config.claudePath, config.agentsPath);
+    const safetyResult = runSafetyCheck(config.agentsPath);
+
     let checkPassed = true;
     let safetyPassed = true;
     let totalWarnings = 0;
 
-    // Run check
     if (config.mode === 'check' || config.mode === 'all') {
       core.info(`Checking ${config.agentsPath}...`);
-      const agentsResult = checkAgentsFile(config.agentsPath);
-
-      for (const error of agentsResult.errors) {
-        core.error(error);
-      }
+      for (const error of agentsResult.errors) core.error(error);
       for (const warning of agentsResult.warnings) {
         core.warning(warning);
         totalWarnings++;
       }
-
-      if (!agentsResult.passed) {
-        checkPassed = false;
-      }
+      if (!agentsResult.passed) checkPassed = false;
 
       core.info(`Checking ${config.claudePath}...`);
-      const claudeResult = checkClaudeFile(config.claudePath, config.agentsPath);
-
-      for (const error of claudeResult.errors) {
-        core.error(error);
-      }
+      for (const error of claudeResult.errors) core.error(error);
       for (const warning of claudeResult.warnings) {
         core.warning(warning);
         totalWarnings++;
       }
-
-      if (!claudeResult.passed) {
-        checkPassed = false;
-      }
+      if (!claudeResult.passed) checkPassed = false;
     }
 
-    // Run safety
     if (config.mode === 'safety' || config.mode === 'all') {
       core.info(`Running safety check on ${config.agentsPath}...`);
-      const safetyResult = runSafetyCheck(config.agentsPath);
-
       for (const finding of safetyResult.findings) {
         const msg = `[${finding.ruleId}] Line ${finding.line}: ${finding.message}`;
         if (finding.severity === 'error') {
@@ -63,19 +49,13 @@ async function run(): Promise<void> {
         }
         totalWarnings++;
       }
-
-      if (!safetyResult.passed && config.failOnSafety) {
-        safetyPassed = false;
-      }
+      if (!safetyResult.passed && config.failOnSafety) safetyPassed = false;
     }
 
-    const agentsResult = checkAgentsFile(config.agentsPath);
-    const claudeResult = checkClaudeFile(config.claudePath, config.agentsPath);
-    const safetyResult = runSafetyCheck(config.agentsPath);
     const scoreResult = computeScore(agentsResult, claudeResult, safetyResult);
 
-    core.setOutput('check_passed', checkPassed.toString());
-    core.setOutput('safety_passed', safetyPassed.toString());
+    core.setOutput('check_passed', (config.mode === 'check' || config.mode === 'all') ? checkPassed.toString() : 'skipped');
+    core.setOutput('safety_passed', (config.mode === 'safety' || config.mode === 'all') ? safetyPassed.toString() : 'skipped');
     core.setOutput('warnings', totalWarnings.toString());
     core.setOutput('score', scoreResult.score.toString());
     core.setOutput('grade', scoreResult.grade);

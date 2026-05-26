@@ -40,7 +40,8 @@ export function checkAgentsFile(filePath: string): CheckResult {
   }
 
   for (const section of REQUIRED_SECTIONS) {
-    const pattern = new RegExp(`^##\\s+${section}`, 'mi');
+    const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(`^##\\s+${escaped}`, 'mi');
     if (!pattern.test(content)) {
       errors.push(`Missing required section: "${section}"`);
     }
@@ -89,24 +90,24 @@ export function checkAgentsFile(filePath: string): CheckResult {
   };
 }
 
-export function checkClaudeFile(path: string, agentsPath: string): CheckResult {
+export function checkClaudeFile(filePath: string, agentsPath: string): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  if (!fs.existsSync(path)) {
+  if (!fs.existsSync(filePath)) {
     return {
       passed: false,
-      errors: [`File not found: ${path}`],
+      errors: [`File not found: ${filePath}`],
       warnings: [],
     };
   }
 
-  const content = fs.readFileSync(path, 'utf-8');
+  const content = fs.readFileSync(filePath, 'utf-8');
 
   if (content.trim().length === 0) {
     return {
       passed: false,
-      errors: [`File is empty: ${path}`],
+      errors: [`File is empty: ${filePath}`],
       warnings: [],
     };
   }
@@ -195,11 +196,21 @@ function getSectionBody(content: string, heading: string): string | null {
 }
 
 function hasContradiction(bodyA: string, bodyB: string): boolean {
-  const negationPattern = /\b(never|don'?t|do not|must not|shall not|forbidden|prohibited)\b/gi;
-  const negationsA = [...bodyA.matchAll(negationPattern)].map((m) => m[0].toLowerCase());
-  const negationsB = [...bodyB.matchAll(negationPattern)].map((m) => m[0].toLowerCase());
+  const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  const wordsA = new Set(normalize(bodyA));
+  const wordsB = new Set(normalize(bodyB));
 
-  if ((negationsA.length > 0) !== (negationsB.length > 0)) return true;
+  const opposites: [string, string][] = [
+    ['always', 'never'],
+    ['allow', 'forbid'],
+    ['allow', 'prohibited'],
+    ['enable', 'disable'],
+    ['require', 'optional'],
+  ];
+
+  for (const [a, b] of opposites) {
+    if ((wordsA.has(a) && wordsB.has(b)) || (wordsA.has(b) && wordsB.has(a))) return true;
+  }
   return false;
 }
 
@@ -218,9 +229,9 @@ function validateCommands(content: string, dir: string): string[] {
       for (const match of content.matchAll(NPM_SCRIPT_PATTERN)) {
         const hasRun = !!match[1];
         const script = match[2];
-        if (!hasRun && builtins.has(script)) continue;
-        if (hasRun && !scripts[script]) {
-          broken.push(`npm run ${script}`);
+        if (builtins.has(script)) continue;
+        if (!scripts[script]) {
+          broken.push(hasRun ? `npm run ${script}` : `npm ${script}`);
         }
       }
     } catch {

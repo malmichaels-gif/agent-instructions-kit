@@ -28,9 +28,14 @@ export function detectProject(dir = '.'): ProjectInfo | null {
   return null;
 }
 
-function detectNode(dir: string): ProjectInfo {
+function detectNode(dir: string): ProjectInfo | null {
   const raw = fs.readFileSync(path.join(dir, 'package.json'), 'utf-8');
-  const pkg: PackageJson = JSON.parse(raw);
+  let pkg: PackageJson;
+  try {
+    pkg = JSON.parse(raw);
+  } catch {
+    return null;
+  }
   const scripts = pkg.scripts || {};
   const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
 
@@ -93,13 +98,13 @@ function detectPython(dir: string): ProjectInfo {
     else if (content.includes('flask')) framework = 'Flask';
 
     if (content.includes('poetry')) installCmd = '`poetry install`';
-    else if (content.includes('[tool.uv]') || content.includes('uv')) installCmd = '`uv sync`';
+    else if (content.includes('[tool.uv]')) installCmd = '`uv sync`';
 
     if (content.includes('ruff')) lintCmd = '`ruff check .`';
     else if (content.includes('flake8')) lintCmd = '`flake8`';
   }
 
-  if (fs.existsSync(path.join(dir, 'requirements.txt'))) {
+  if (installCmd === '`pip install -e ".[dev]"`' && fs.existsSync(path.join(dir, 'requirements.txt'))) {
     installCmd = '`pip install -r requirements.txt`';
   }
 

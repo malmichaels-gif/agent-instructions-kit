@@ -13,7 +13,10 @@ function hasFlag(args: string[], flag: string): boolean {
 
 function getArg(args: string[], flag: string, fallback: string): string {
   const idx = args.indexOf(flag);
-  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : fallback;
+  if (idx === -1 || idx + 1 >= args.length) return fallback;
+  const value = args[idx + 1];
+  if (value.startsWith('-')) return fallback;
+  return value;
 }
 
 function main(): void {
@@ -138,7 +141,10 @@ function runSafety(args: string[]): void {
   const agentsPath = getArg(args, '--agents', 'AGENTS.md');
   const discover = hasFlag(args, '--discover');
 
-  const files = discover ? [agentsPath, ...discoverFiles('.')] : [agentsPath];
+  const claudePath = getArg(args, '--claude', 'CLAUDE.md');
+  const discovered = discover ? discoverFiles('.') : [];
+  if (discover && fs.existsSync(claudePath)) discovered.unshift(claudePath);
+  const files = [agentsPath, ...discovered];
   const allResults: Record<string, ReturnType<typeof runSafetyCheck>> = {};
 
   for (const file of files) {
@@ -149,7 +155,7 @@ function runSafety(args: string[]): void {
     const anyFailed = Object.values(allResults).some((r) => !r.passed);
     console.log(JSON.stringify({
       files: allResults,
-      passed: !anyFailed || !failOnSafety,
+      passed: !anyFailed,
     }, null, 2));
     process.exit(anyFailed && failOnSafety ? 1 : 0);
     return;

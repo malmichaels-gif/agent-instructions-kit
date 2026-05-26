@@ -7,6 +7,8 @@ export interface ScoreResult {
   suggestions: string[];
 }
 
+const CLARITY_RULE_IDS = new Set(['ambiguous-hedge', 'vague-persona']);
+
 export function computeScore(
   agentsCheck: CheckResult,
   claudeCheck: CheckResult,
@@ -37,7 +39,7 @@ export function computeScore(
 
   let safetyPoints = 30;
   const errors = safetyResult.findings.filter((f) => f.severity === 'error');
-  const warns = safetyResult.findings.filter((f) => f.severity === 'warn');
+  const warns = safetyResult.findings.filter((f) => f.severity === 'warn' && !CLARITY_RULE_IDS.has(f.ruleId));
   safetyPoints -= errors.length * 10;
   safetyPoints -= warns.length * 3;
   if (errors.length > 0) suggestions.push(`Fix ${errors.length} safety error(s) — these indicate dangerous patterns`);
@@ -47,7 +49,8 @@ export function computeScore(
   let clarityPoints = 20;
   const lengthWarning = agentsCheck.warnings.find((w) => w.includes('lines'));
   if (lengthWarning) {
-    clarityPoints -= lengthWarning.includes('300') ? 10 : 5;
+    const isHardWarn = />\s*300\)/.test(lengthWarning);
+    clarityPoints -= isHardWarn ? 10 : 5;
     suggestions.push('Trim instruction file — shorter files correlate with better agent performance');
   }
   const ambiguityFindings = safetyResult.findings.filter((f) => f.ruleId === 'ambiguous-hedge');

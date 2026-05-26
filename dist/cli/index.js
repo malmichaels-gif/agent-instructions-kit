@@ -75,7 +75,8 @@ function checkAgentsFile(filePath) {
         };
     }
     for (const section of REQUIRED_SECTIONS) {
-        const pattern = new RegExp(`^##\\s+${section}`, 'mi');
+        const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const pattern = new RegExp(`^##\\s+${escaped}`, 'mi');
         if (!pattern.test(content)) {
             errors.push(`Missing required section: "${section}"`);
         }
@@ -117,21 +118,21 @@ function checkAgentsFile(filePath) {
         warnings,
     };
 }
-function checkClaudeFile(path, agentsPath) {
+function checkClaudeFile(filePath, agentsPath) {
     const errors = [];
     const warnings = [];
-    if (!fs.existsSync(path)) {
+    if (!fs.existsSync(filePath)) {
         return {
             passed: false,
-            errors: [`File not found: ${path}`],
+            errors: [`File not found: ${filePath}`],
             warnings: [],
         };
     }
-    const content = fs.readFileSync(path, 'utf-8');
+    const content = fs.readFileSync(filePath, 'utf-8');
     if (content.trim().length === 0) {
         return {
             passed: false,
-            errors: [`File is empty: ${path}`],
+            errors: [`File is empty: ${filePath}`],
             warnings: [],
         };
     }
@@ -205,11 +206,20 @@ function getSectionBody(content, heading) {
     return section ? section.body.trim() : null;
 }
 function hasContradiction(bodyA, bodyB) {
-    const negationPattern = /\b(never|don'?t|do not|must not|shall not|forbidden|prohibited)\b/gi;
-    const negationsA = [...bodyA.matchAll(negationPattern)].map((m) => m[0].toLowerCase());
-    const negationsB = [...bodyB.matchAll(negationPattern)].map((m) => m[0].toLowerCase());
-    if ((negationsA.length > 0) !== (negationsB.length > 0))
-        return true;
+    const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+    const wordsA = new Set(normalize(bodyA));
+    const wordsB = new Set(normalize(bodyB));
+    const opposites = [
+        ['always', 'never'],
+        ['allow', 'forbid'],
+        ['allow', 'prohibited'],
+        ['enable', 'disable'],
+        ['require', 'optional'],
+    ];
+    for (const [a, b] of opposites) {
+        if ((wordsA.has(a) && wordsB.has(b)) || (wordsA.has(b) && wordsB.has(a)))
+            return true;
+    }
     return false;
 }
 const NPM_SCRIPT_PATTERN = /npm\s+(run\s+)?(\w[\w-]*)/g;
@@ -224,10 +234,10 @@ function validateCommands(content, dir) {
             for (const match of content.matchAll(NPM_SCRIPT_PATTERN)) {
                 const hasRun = !!match[1];
                 const script = match[2];
-                if (!hasRun && builtins.has(script))
+                if (builtins.has(script))
                     continue;
-                if (hasRun && !scripts[script]) {
-                    broken.push(`npm run ${script}`);
+                if (!scripts[script]) {
+                    broken.push(hasRun ? `npm run ${script}` : `npm ${script}`);
                 }
             }
         }
@@ -297,7 +307,12 @@ function hasFlag(args, flag) {
 }
 function getArg(args, flag, fallback) {
     const idx = args.indexOf(flag);
-    return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : fallback;
+    if (idx === -1 || idx + 1 >= args.length)
+        return fallback;
+    const value = args[idx + 1];
+    if (value.startsWith('-'))
+        return fallback;
+    return value;
 }
 function main() {
     const args = process.argv.slice(2);
@@ -409,7 +424,11 @@ function runSafety(args) {
     const failOnSafety = hasFlag(args, '--fail');
     const agentsPath = getArg(args, '--agents', 'AGENTS.md');
     const discover = hasFlag(args, '--discover');
-    const files = discover ? [agentsPath, ...(0, discover_js_1.discoverFiles)('.')] : [agentsPath];
+    const claudePath = getArg(args, '--claude', 'CLAUDE.md');
+    const discovered = discover ? (0, discover_js_1.discoverFiles)('.') : [];
+    if (discover && fs.existsSync(claudePath))
+        discovered.unshift(claudePath);
+    const files = [agentsPath, ...discovered];
     const allResults = {};
     for (const file of files) {
         allResults[file] = (0, safety_js_1.runSafetyCheck)(file);
@@ -418,7 +437,7 @@ function runSafety(args) {
         const anyFailed = Object.values(allResults).some((r) => !r.passed);
         console.log(JSON.stringify({
             files: allResults,
-            passed: !anyFailed || !failOnSafety,
+            passed: !anyFailed,
         }, null, 2));
         process.exit(anyFailed && failOnSafety ? 1 : 0);
         return;
@@ -578,7 +597,13 @@ function detectProject(dir = '.') {
 }
 function detectNode(dir) {
     const raw = fs.readFileSync(path.join(dir, 'package.json'), 'utf-8');
-    const pkg = JSON.parse(raw);
+    let pkg;
+    try {
+        pkg = JSON.parse(raw);
+    }
+    catch {
+        return null;
+    }
     const scripts = pkg.scripts || {};
     const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
     let framework = 'Node.js';
@@ -648,14 +673,14 @@ function detectPython(dir) {
             framework = 'Flask';
         if (content.includes('poetry'))
             installCmd = '`poetry install`';
-        else if (content.includes('[tool.uv]') || content.includes('uv'))
+        else if (content.includes('[tool.uv]'))
             installCmd = '`uv sync`';
         if (content.includes('ruff'))
             lintCmd = '`ruff check .`';
         else if (content.includes('flake8'))
             lintCmd = '`flake8`';
     }
-    if (fs.existsSync(path.join(dir, 'requirements.txt'))) {
+    if (installCmd === '`pip install -e ".[dev]"`' && fs.existsSync(path.join(dir, 'requirements.txt'))) {
         installCmd = '`pip install -r requirements.txt`';
     }
     const commands = {
@@ -905,7 +930,7 @@ const SAFETY_RULES = [
     },
     {
         id: 'ambiguous-hedge',
-        pattern: /\b(try to|where possible|if appropriate|when feasible|as needed|be careful|consider|ideally|optionally)\b/i,
+        pattern: /\b(try to|where possible|if appropriate|when feasible|as needed|be careful|ideally|optionally)\b/i,
         message: 'Ambiguous hedge word — agents default to non-interactive behavior when instructions are vague (ICLR 2026). Use concrete, verifiable language instead',
         severity: 'warn',
     },
@@ -992,6 +1017,7 @@ function getSafetyRules() {
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.computeScore = computeScore;
+const CLARITY_RULE_IDS = new Set(['ambiguous-hedge', 'vague-persona']);
 function computeScore(agentsCheck, claudeCheck, safetyResult) {
     const breakdown = {};
     const suggestions = [];
@@ -1014,7 +1040,7 @@ function computeScore(agentsCheck, claudeCheck, safetyResult) {
     breakdown['Structure'] = Math.max(0, structurePoints);
     let safetyPoints = 30;
     const errors = safetyResult.findings.filter((f) => f.severity === 'error');
-    const warns = safetyResult.findings.filter((f) => f.severity === 'warn');
+    const warns = safetyResult.findings.filter((f) => f.severity === 'warn' && !CLARITY_RULE_IDS.has(f.ruleId));
     safetyPoints -= errors.length * 10;
     safetyPoints -= warns.length * 3;
     if (errors.length > 0)
@@ -1025,7 +1051,8 @@ function computeScore(agentsCheck, claudeCheck, safetyResult) {
     let clarityPoints = 20;
     const lengthWarning = agentsCheck.warnings.find((w) => w.includes('lines'));
     if (lengthWarning) {
-        clarityPoints -= lengthWarning.includes('300') ? 10 : 5;
+        const isHardWarn = />\s*300\)/.test(lengthWarning);
+        clarityPoints -= isHardWarn ? 10 : 5;
         suggestions.push('Trim instruction file — shorter files correlate with better agent performance');
     }
     const ambiguityFindings = safetyResult.findings.filter((f) => f.ruleId === 'ambiguous-hedge');
