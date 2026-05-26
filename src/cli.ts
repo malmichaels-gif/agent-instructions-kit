@@ -3,6 +3,18 @@ import * as fs from 'fs';
 import { checkAgentsFile, checkClaudeFile } from './check.js';
 import { runSafetyCheck } from './safety.js';
 import { getTemplate, CLAUDE_TEMPLATE } from './templates.js';
+import { detectProject, renderTemplate } from './detect.js';
+import { computeScore } from './score.js';
+import { discoverFiles } from './discover.js';
+
+function hasFlag(args: string[], flag: string): boolean {
+  return args.includes(flag);
+}
+
+function getArg(args: string[], flag: string, fallback: string): string {
+  const idx = args.indexOf(flag);
+  return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : fallback;
+}
 
 function main(): void {
   const args = process.argv.slice(2);
@@ -13,15 +25,20 @@ function main(): void {
     process.exit(0);
   }
 
+  const subArgs = args.slice(1);
+
   switch (command) {
     case 'init':
-      runInit(args.slice(1));
+      runInit(subArgs);
       break;
     case 'check':
-      runCheck(args.slice(1));
+      runCheck(subArgs);
       break;
     case 'safety':
-      runSafety(args.slice(1));
+      runSafety(subArgs);
+      break;
+    case 'score':
+      runScore(subArgs);
       break;
     default:
       console.error(`Unknown command: ${command}`);
@@ -59,49 +76,52 @@ function runInit(args: string[]): void {
     process.exit(1);
   }
 
-  fs.writeFileSync(agentsPath, getTemplate(template));
+  let content = getTemplate(template);
+  const detected = detectProject('.');
+  if (detected) {
+    content = renderTemplate(content, detected);
+    console.log(`Detected ${detected.language} / ${detected.framework} project`);
+  }
+
+  fs.writeFileSync(agentsPath, content);
   fs.writeFileSync(claudePath, CLAUDE_TEMPLATE);
 
   console.log(`Created ${agentsPath} (${template} template)`);
   console.log(`Created ${claudePath}`);
-  console.log('\nNext steps:');
-  console.log('1. Edit AGENTS.md with your project-specific instructions');
-  console.log('2. Commit both files to your repo');
+  if (!detected) {
+    console.log('\nNext steps:');
+    console.log('1. Edit AGENTS.md with your project-specific instructions');
+    console.log('2. Commit both files to your repo');
+  } else {
+    console.log('\nStack auto-detected — review the generated AGENTS.md and adjust as needed.');
+  }
 }
 
 function runCheck(args: string[]): void {
-  let agentsPath = 'AGENTS.md';
-  let claudePath = 'CLAUDE.md';
+  const json = hasFlag(args, '--json');
+  const agentsPath = getArg(args, '--agents', 'AGENTS.md');
+  const claudePath = getArg(args, '--claude', 'CLAUDE.md');
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--agents') {
-      agentsPath = args[i + 1];
-      i++;
-    } else if (args[i] === '--claude') {
-      claudePath = args[i + 1];
-      i++;
-    }
+  const agentsResult = checkAgentsFile(agentsPath);
+  const claudeResult = checkClaudeFile(claudePath, agentsPath);
+
+  if (json) {
+    console.log(JSON.stringify({
+      agents: { path: agentsPath, ...agentsResult },
+      claude: { path: claudePath, ...claudeResult },
+      passed: agentsResult.passed && claudeResult.passed,
+    }, null, 2));
+    process.exit(agentsResult.passed && claudeResult.passed ? 0 : 1);
+    return;
   }
 
   console.log(`Checking ${agentsPath}...`);
-  const agentsResult = checkAgentsFile(agentsPath);
-
-  for (const error of agentsResult.errors) {
-    console.error(`  ERROR: ${error}`);
-  }
-  for (const warning of agentsResult.warnings) {
-    console.warn(`  WARN: ${warning}`);
-  }
+  for (const error of agentsResult.errors) console.error(`  ERROR: ${error}`);
+  for (const warning of agentsResult.warnings) console.warn(`  WARN: ${warning}`);
 
   console.log(`Checking ${claudePath}...`);
-  const claudeResult = checkClaudeFile(claudePath, agentsPath);
-
-  for (const error of claudeResult.errors) {
-    console.error(`  ERROR: ${error}`);
-  }
-  for (const warning of claudeResult.warnings) {
-    console.warn(`  WARN: ${warning}`);
-  }
+  for (const error of claudeResult.errors) console.error(`  ERROR: ${error}`);
+  for (const warning of claudeResult.warnings) console.warn(`  WARN: ${warning}`);
 
   if (agentsResult.passed && claudeResult.passed) {
     console.log('\nAll checks passed!');
@@ -113,38 +133,88 @@ function runCheck(args: string[]): void {
 }
 
 function runSafety(args: string[]): void {
-  let agentsPath = 'AGENTS.md';
-  let failOnSafety = false;
+  const json = hasFlag(args, '--json');
+  const failOnSafety = hasFlag(args, '--fail');
+  const agentsPath = getArg(args, '--agents', 'AGENTS.md');
+  const discover = hasFlag(args, '--discover');
 
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--agents') {
-      agentsPath = args[i + 1];
-      i++;
-    } else if (args[i] === '--fail') {
-      failOnSafety = true;
-    }
+  const files = discover ? [agentsPath, ...discoverFiles('.')] : [agentsPath];
+  const allResults: Record<string, ReturnType<typeof runSafetyCheck>> = {};
+
+  for (const file of files) {
+    allResults[file] = runSafetyCheck(file);
   }
 
-  console.log(`Running safety check on ${agentsPath}...`);
-  const result = runSafetyCheck(agentsPath);
+  if (json) {
+    const anyFailed = Object.values(allResults).some((r) => !r.passed);
+    console.log(JSON.stringify({
+      files: allResults,
+      passed: !anyFailed || !failOnSafety,
+    }, null, 2));
+    process.exit(anyFailed && failOnSafety ? 1 : 0);
+    return;
+  }
 
-  if (result.findings.length === 0) {
+  let totalFindings = 0;
+  let anyFailed = false;
+
+  for (const [file, result] of Object.entries(allResults)) {
+    console.log(`Running safety check on ${file}...`);
+    if (result.findings.length === 0) {
+      console.log('  No safety issues found.');
+      continue;
+    }
+    for (const finding of result.findings) {
+      const prefix = finding.severity === 'error' ? 'ERROR' : 'WARN';
+      console.log(`  ${prefix} [${finding.ruleId}] Line ${finding.line}: ${finding.message}`);
+    }
+    totalFindings += result.findings.length;
+    if (!result.passed) anyFailed = true;
+  }
+
+  if (totalFindings === 0) {
     console.log('No safety issues found.');
     process.exit(0);
   }
 
-  for (const finding of result.findings) {
-    const prefix = finding.severity === 'error' ? 'ERROR' : 'WARN';
-    console.log(`  ${prefix} [${finding.ruleId}] Line ${finding.line}: ${finding.message}`);
-  }
-
-  if (!result.passed && failOnSafety) {
+  if (anyFailed && failOnSafety) {
     console.log('\nSafety check failed.');
     process.exit(1);
   } else {
-    console.log(`\n${result.findings.length} finding(s).`);
+    console.log(`\n${totalFindings} finding(s).`);
     process.exit(0);
   }
+}
+
+function runScore(args: string[]): void {
+  const json = hasFlag(args, '--json');
+  const agentsPath = getArg(args, '--agents', 'AGENTS.md');
+  const claudePath = getArg(args, '--claude', 'CLAUDE.md');
+
+  const agentsResult = checkAgentsFile(agentsPath);
+  const claudeResult = checkClaudeFile(claudePath, agentsPath);
+  const safetyResult = runSafetyCheck(agentsPath);
+
+  const result = computeScore(agentsResult, claudeResult, safetyResult);
+
+  if (json) {
+    console.log(JSON.stringify(result, null, 2));
+    process.exit(0);
+    return;
+  }
+
+  console.log(`\nGrade: ${result.grade}  (${result.score}/100)`);
+  console.log('');
+  for (const [category, points] of Object.entries(result.breakdown)) {
+    console.log(`  ${category}: ${points}`);
+  }
+  if (result.suggestions.length > 0) {
+    console.log('\nSuggestions:');
+    for (const suggestion of result.suggestions) {
+      console.log(`  - ${suggestion}`);
+    }
+  }
+  console.log('');
 }
 
 function printHelp(): void {
@@ -155,6 +225,7 @@ Commands:
   init      Generate AGENTS.md and CLAUDE.md files
   check     Validate that required sections exist
   safety    Check for suspicious/dangerous patterns
+  score     Grade your instruction files (A-F)
 
 Options:
   init:
@@ -163,16 +234,27 @@ Options:
   check:
     --agents <path>         Path to AGENTS.md (default: AGENTS.md)
     --claude <path>         Path to CLAUDE.md (default: CLAUDE.md)
+    --json                  Output results as JSON
 
   safety:
     --agents <path>         Path to AGENTS.md (default: AGENTS.md)
     --fail                  Exit with error code if issues found
+    --json                  Output results as JSON
+    --discover              Also scan other agent config files
+
+  score:
+    --agents <path>         Path to AGENTS.md (default: AGENTS.md)
+    --claude <path>         Path to CLAUDE.md (default: CLAUDE.md)
+    --json                  Output results as JSON
 
 Examples:
   npx agent-instructions-kit init
   npx agent-instructions-kit init --template opinionated
   npx agent-instructions-kit check
+  npx agent-instructions-kit check --json
   npx agent-instructions-kit safety --fail
+  npx agent-instructions-kit safety --discover
+  npx agent-instructions-kit score
 `);
 }
 

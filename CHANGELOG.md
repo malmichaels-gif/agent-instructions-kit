@@ -7,6 +7,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 ## [Unreleased]
 
 ### Added
+- `score` command — grades instruction files A through F across Structure, Safety, Clarity, and Consistency (100-point scale)
+- `--json` output mode for `check`, `safety`, and `score` commands
+- `--discover` flag for `safety` — scans `.cursor/rules`, `.github/copilot-instructions.md`, `.windsurfrules`, and other agent config files
+- Smart `init` — auto-detects Node.js, Rust, Python, and Go projects and pre-fills templates with real commands and framework
+- Command validation — warns if AGENTS.md references `npm run` scripts that don't exist in `package.json`
+- npm publish workflow — publishes to npm registry on GitHub Release
+- `score` and `grade` outputs for the GitHub Action
 - 6 new safety rules: `override-instructions`, `new-identity`, `hidden-instructions`, `mcp-tool-abuse`, `base64-obfuscation`, `webhook-exfil`
 - 6 more safety rules: `ambiguous-hedge`, `vague-persona`, `leaked-aws-key`, `leaked-generic-secret`, `leaked-private-key`, `leaked-jwt`
 - Quality checks in `check` command: file length warnings, missing verification/boundary sections, prose-without-commands detection, cross-file consistency between CLAUDE.md and AGENTS.md, boundary language detection

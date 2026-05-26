@@ -44,6 +44,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.checkAgentsFile = checkAgentsFile;
 exports.checkClaudeFile = checkClaudeFile;
 const fs = __importStar(__nccwpck_require__(896));
+const path = __importStar(__nccwpck_require__(928));
 const REQUIRED_SECTIONS = [
     'Mission',
     'Local dev commands',
@@ -55,21 +56,21 @@ const RECOMMENDED_SECTIONS = [
 const LINE_WARN_THRESHOLD = 150;
 const LINE_ERROR_THRESHOLD = 300;
 const BACKTICK_COMMAND = /`[^`]+`/;
-function checkAgentsFile(path) {
+function checkAgentsFile(filePath) {
     const errors = [];
     const warnings = [];
-    if (!fs.existsSync(path)) {
+    if (!fs.existsSync(filePath)) {
         return {
             passed: false,
-            errors: [`File not found: ${path}`],
+            errors: [`File not found: ${filePath}`],
             warnings: [],
         };
     }
-    const content = fs.readFileSync(path, 'utf-8');
+    const content = fs.readFileSync(filePath, 'utf-8');
     if (content.trim().length === 0) {
         return {
             passed: false,
-            errors: [`File is empty: ${path}`],
+            errors: [`File is empty: ${filePath}`],
             warnings: [],
         };
     }
@@ -104,6 +105,11 @@ function checkAgentsFile(path) {
         if (section.lineCount >= 4 && !BACKTICK_COMMAND.test(section.body) && !section.heading.toLowerCase().includes('mission')) {
             warnings.push(`Section "${section.heading}" has no executable commands — agents follow instructions with verifiable commands more reliably`);
         }
+    }
+    const dir = path.dirname(filePath);
+    const brokenCmds = validateCommands(content, dir);
+    for (const cmd of brokenCmds) {
+        warnings.push(`Referenced command \`${cmd}\` does not appear to exist in this project`);
     }
     return {
         passed: errors.length === 0,
@@ -206,6 +212,37 @@ function hasContradiction(bodyA, bodyB) {
         return true;
     return false;
 }
+const NPM_SCRIPT_PATTERN = /npm\s+(run\s+)?(\w[\w-]*)/g;
+function validateCommands(content, dir) {
+    const broken = [];
+    const pkgPath = path.join(dir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+            const scripts = pkg.scripts || {};
+            const builtins = new Set(['test', 'start', 'install', 'publish', 'pack', 'init', 'version']);
+            for (const match of content.matchAll(NPM_SCRIPT_PATTERN)) {
+                const hasRun = !!match[1];
+                const script = match[2];
+                if (!hasRun && builtins.has(script))
+                    continue;
+                if (hasRun && !scripts[script]) {
+                    broken.push(`npm run ${script}`);
+                }
+            }
+        }
+        catch {
+            // Skip if package.json is invalid
+        }
+    }
+    if (fs.existsSync(path.join(dir, 'Cargo.toml'))) {
+        // Cargo commands are built-in — always valid
+    }
+    if (fs.existsSync(path.join(dir, 'go.mod'))) {
+        // Go commands are built-in — always valid
+    }
+    return broken;
+}
 
 
 /***/ }),
@@ -252,6 +289,16 @@ const fs = __importStar(__nccwpck_require__(896));
 const check_js_1 = __nccwpck_require__(883);
 const safety_js_1 = __nccwpck_require__(617);
 const templates_js_1 = __nccwpck_require__(340);
+const detect_js_1 = __nccwpck_require__(52);
+const score_js_1 = __nccwpck_require__(9);
+const discover_js_1 = __nccwpck_require__(164);
+function hasFlag(args, flag) {
+    return args.includes(flag);
+}
+function getArg(args, flag, fallback) {
+    const idx = args.indexOf(flag);
+    return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : fallback;
+}
 function main() {
     const args = process.argv.slice(2);
     const command = args[0];
@@ -259,15 +306,19 @@ function main() {
         printHelp();
         process.exit(0);
     }
+    const subArgs = args.slice(1);
     switch (command) {
         case 'init':
-            runInit(args.slice(1));
+            runInit(subArgs);
             break;
         case 'check':
-            runCheck(args.slice(1));
+            runCheck(subArgs);
             break;
         case 'safety':
-            runSafety(args.slice(1));
+            runSafety(subArgs);
+            break;
+        case 'score':
+            runScore(subArgs);
             break;
         default:
             console.error(`Unknown command: ${command}`);
@@ -300,43 +351,50 @@ function runInit(args) {
         console.error(`${claudePath} already exists. Remove it first or edit manually.`);
         process.exit(1);
     }
-    fs.writeFileSync(agentsPath, (0, templates_js_1.getTemplate)(template));
+    let content = (0, templates_js_1.getTemplate)(template);
+    const detected = (0, detect_js_1.detectProject)('.');
+    if (detected) {
+        content = (0, detect_js_1.renderTemplate)(content, detected);
+        console.log(`Detected ${detected.language} / ${detected.framework} project`);
+    }
+    fs.writeFileSync(agentsPath, content);
     fs.writeFileSync(claudePath, templates_js_1.CLAUDE_TEMPLATE);
     console.log(`Created ${agentsPath} (${template} template)`);
     console.log(`Created ${claudePath}`);
-    console.log('\nNext steps:');
-    console.log('1. Edit AGENTS.md with your project-specific instructions');
-    console.log('2. Commit both files to your repo');
+    if (!detected) {
+        console.log('\nNext steps:');
+        console.log('1. Edit AGENTS.md with your project-specific instructions');
+        console.log('2. Commit both files to your repo');
+    }
+    else {
+        console.log('\nStack auto-detected — review the generated AGENTS.md and adjust as needed.');
+    }
 }
 function runCheck(args) {
-    let agentsPath = 'AGENTS.md';
-    let claudePath = 'CLAUDE.md';
-    for (let i = 0; i < args.length; i++) {
-        if (args[i] === '--agents') {
-            agentsPath = args[i + 1];
-            i++;
-        }
-        else if (args[i] === '--claude') {
-            claudePath = args[i + 1];
-            i++;
-        }
+    const json = hasFlag(args, '--json');
+    const agentsPath = getArg(args, '--agents', 'AGENTS.md');
+    const claudePath = getArg(args, '--claude', 'CLAUDE.md');
+    const agentsResult = (0, check_js_1.checkAgentsFile)(agentsPath);
+    const claudeResult = (0, check_js_1.checkClaudeFile)(claudePath, agentsPath);
+    if (json) {
+        console.log(JSON.stringify({
+            agents: { path: agentsPath, ...agentsResult },
+            claude: { path: claudePath, ...claudeResult },
+            passed: agentsResult.passed && claudeResult.passed,
+        }, null, 2));
+        process.exit(agentsResult.passed && claudeResult.passed ? 0 : 1);
+        return;
     }
     console.log(`Checking ${agentsPath}...`);
-    const agentsResult = (0, check_js_1.checkAgentsFile)(agentsPath);
-    for (const error of agentsResult.errors) {
+    for (const error of agentsResult.errors)
         console.error(`  ERROR: ${error}`);
-    }
-    for (const warning of agentsResult.warnings) {
+    for (const warning of agentsResult.warnings)
         console.warn(`  WARN: ${warning}`);
-    }
     console.log(`Checking ${claudePath}...`);
-    const claudeResult = (0, check_js_1.checkClaudeFile)(claudePath, agentsPath);
-    for (const error of claudeResult.errors) {
+    for (const error of claudeResult.errors)
         console.error(`  ERROR: ${error}`);
-    }
-    for (const warning of claudeResult.warnings) {
+    for (const warning of claudeResult.warnings)
         console.warn(`  WARN: ${warning}`);
-    }
     if (agentsResult.passed && claudeResult.passed) {
         console.log('\nAll checks passed!');
         process.exit(0);
@@ -347,35 +405,78 @@ function runCheck(args) {
     }
 }
 function runSafety(args) {
-    let agentsPath = 'AGENTS.md';
-    let failOnSafety = false;
-    for (let i = 0; i < args.length; i++) {
-        if (args[i] === '--agents') {
-            agentsPath = args[i + 1];
-            i++;
-        }
-        else if (args[i] === '--fail') {
-            failOnSafety = true;
-        }
+    const json = hasFlag(args, '--json');
+    const failOnSafety = hasFlag(args, '--fail');
+    const agentsPath = getArg(args, '--agents', 'AGENTS.md');
+    const discover = hasFlag(args, '--discover');
+    const files = discover ? [agentsPath, ...(0, discover_js_1.discoverFiles)('.')] : [agentsPath];
+    const allResults = {};
+    for (const file of files) {
+        allResults[file] = (0, safety_js_1.runSafetyCheck)(file);
     }
-    console.log(`Running safety check on ${agentsPath}...`);
-    const result = (0, safety_js_1.runSafetyCheck)(agentsPath);
-    if (result.findings.length === 0) {
+    if (json) {
+        const anyFailed = Object.values(allResults).some((r) => !r.passed);
+        console.log(JSON.stringify({
+            files: allResults,
+            passed: !anyFailed || !failOnSafety,
+        }, null, 2));
+        process.exit(anyFailed && failOnSafety ? 1 : 0);
+        return;
+    }
+    let totalFindings = 0;
+    let anyFailed = false;
+    for (const [file, result] of Object.entries(allResults)) {
+        console.log(`Running safety check on ${file}...`);
+        if (result.findings.length === 0) {
+            console.log('  No safety issues found.');
+            continue;
+        }
+        for (const finding of result.findings) {
+            const prefix = finding.severity === 'error' ? 'ERROR' : 'WARN';
+            console.log(`  ${prefix} [${finding.ruleId}] Line ${finding.line}: ${finding.message}`);
+        }
+        totalFindings += result.findings.length;
+        if (!result.passed)
+            anyFailed = true;
+    }
+    if (totalFindings === 0) {
         console.log('No safety issues found.');
         process.exit(0);
     }
-    for (const finding of result.findings) {
-        const prefix = finding.severity === 'error' ? 'ERROR' : 'WARN';
-        console.log(`  ${prefix} [${finding.ruleId}] Line ${finding.line}: ${finding.message}`);
-    }
-    if (!result.passed && failOnSafety) {
+    if (anyFailed && failOnSafety) {
         console.log('\nSafety check failed.');
         process.exit(1);
     }
     else {
-        console.log(`\n${result.findings.length} finding(s).`);
+        console.log(`\n${totalFindings} finding(s).`);
         process.exit(0);
     }
+}
+function runScore(args) {
+    const json = hasFlag(args, '--json');
+    const agentsPath = getArg(args, '--agents', 'AGENTS.md');
+    const claudePath = getArg(args, '--claude', 'CLAUDE.md');
+    const agentsResult = (0, check_js_1.checkAgentsFile)(agentsPath);
+    const claudeResult = (0, check_js_1.checkClaudeFile)(claudePath, agentsPath);
+    const safetyResult = (0, safety_js_1.runSafetyCheck)(agentsPath);
+    const result = (0, score_js_1.computeScore)(agentsResult, claudeResult, safetyResult);
+    if (json) {
+        console.log(JSON.stringify(result, null, 2));
+        process.exit(0);
+        return;
+    }
+    console.log(`\nGrade: ${result.grade}  (${result.score}/100)`);
+    console.log('');
+    for (const [category, points] of Object.entries(result.breakdown)) {
+        console.log(`  ${category}: ${points}`);
+    }
+    if (result.suggestions.length > 0) {
+        console.log('\nSuggestions:');
+        for (const suggestion of result.suggestions) {
+            console.log(`  - ${suggestion}`);
+        }
+    }
+    console.log('');
 }
 function printHelp() {
     console.log(`
@@ -385,6 +486,7 @@ Commands:
   init      Generate AGENTS.md and CLAUDE.md files
   check     Validate that required sections exist
   safety    Check for suspicious/dangerous patterns
+  score     Grade your instruction files (A-F)
 
 Options:
   init:
@@ -393,19 +495,296 @@ Options:
   check:
     --agents <path>         Path to AGENTS.md (default: AGENTS.md)
     --claude <path>         Path to CLAUDE.md (default: CLAUDE.md)
+    --json                  Output results as JSON
 
   safety:
     --agents <path>         Path to AGENTS.md (default: AGENTS.md)
     --fail                  Exit with error code if issues found
+    --json                  Output results as JSON
+    --discover              Also scan other agent config files
+
+  score:
+    --agents <path>         Path to AGENTS.md (default: AGENTS.md)
+    --claude <path>         Path to CLAUDE.md (default: CLAUDE.md)
+    --json                  Output results as JSON
 
 Examples:
   npx agent-instructions-kit init
   npx agent-instructions-kit init --template opinionated
   npx agent-instructions-kit check
+  npx agent-instructions-kit check --json
   npx agent-instructions-kit safety --fail
+  npx agent-instructions-kit safety --discover
+  npx agent-instructions-kit score
 `);
 }
 main();
+
+
+/***/ }),
+
+/***/ 52:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.detectProject = detectProject;
+exports.renderTemplate = renderTemplate;
+const fs = __importStar(__nccwpck_require__(896));
+const path = __importStar(__nccwpck_require__(928));
+function detectProject(dir = '.') {
+    if (fs.existsSync(path.join(dir, 'package.json')))
+        return detectNode(dir);
+    if (fs.existsSync(path.join(dir, 'Cargo.toml')))
+        return detectRust(dir);
+    if (fs.existsSync(path.join(dir, 'pyproject.toml')) || fs.existsSync(path.join(dir, 'requirements.txt')))
+        return detectPython(dir);
+    if (fs.existsSync(path.join(dir, 'go.mod')))
+        return detectGo(dir);
+    return null;
+}
+function detectNode(dir) {
+    const raw = fs.readFileSync(path.join(dir, 'package.json'), 'utf-8');
+    const pkg = JSON.parse(raw);
+    const scripts = pkg.scripts || {};
+    const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+    let framework = 'Node.js';
+    if (allDeps['next'])
+        framework = 'Next.js';
+    else if (allDeps['@angular/core'])
+        framework = 'Angular';
+    else if (allDeps['vue'])
+        framework = 'Vue';
+    else if (allDeps['react'])
+        framework = 'React';
+    else if (allDeps['express'])
+        framework = 'Express';
+    else if (allDeps['fastify'])
+        framework = 'Fastify';
+    else if (allDeps['@nestjs/core'])
+        framework = 'NestJS';
+    const language = allDeps['typescript'] ? 'TypeScript' : 'JavaScript';
+    const commands = {
+        install: '`npm install`',
+        test: scripts['test'] ? '`npm test`' : '`npm test` (no test script found — add one)',
+    };
+    if (scripts['typecheck'] || scripts['type-check']) {
+        commands.typecheck = scripts['typecheck'] ? '`npm run typecheck`' : '`npm run type-check`';
+    }
+    if (scripts['lint'])
+        commands.lint = '`npm run lint`';
+    if (scripts['build'])
+        commands.build = '`npm run build`';
+    return { language, framework, commands };
+}
+function detectRust(dir) {
+    let framework = 'Rust';
+    const cargoContent = fs.readFileSync(path.join(dir, 'Cargo.toml'), 'utf-8');
+    if (cargoContent.includes('actix-web'))
+        framework = 'Actix Web';
+    else if (cargoContent.includes('axum'))
+        framework = 'Axum';
+    else if (cargoContent.includes('rocket'))
+        framework = 'Rocket';
+    else if (cargoContent.includes('tauri'))
+        framework = 'Tauri';
+    return {
+        language: 'Rust',
+        framework,
+        commands: {
+            install: '`cargo build`',
+            lint: '`cargo clippy`',
+            test: '`cargo test`',
+            build: '`cargo build --release`',
+        },
+    };
+}
+function detectPython(dir) {
+    let framework = 'Python';
+    const testCmd = '`pytest`';
+    let installCmd = '`pip install -e ".[dev]"`';
+    let lintCmd;
+    const pyprojectPath = path.join(dir, 'pyproject.toml');
+    if (fs.existsSync(pyprojectPath)) {
+        const content = fs.readFileSync(pyprojectPath, 'utf-8');
+        if (content.includes('fastapi'))
+            framework = 'FastAPI';
+        else if (content.includes('django'))
+            framework = 'Django';
+        else if (content.includes('flask'))
+            framework = 'Flask';
+        if (content.includes('poetry'))
+            installCmd = '`poetry install`';
+        else if (content.includes('[tool.uv]') || content.includes('uv'))
+            installCmd = '`uv sync`';
+        if (content.includes('ruff'))
+            lintCmd = '`ruff check .`';
+        else if (content.includes('flake8'))
+            lintCmd = '`flake8`';
+    }
+    if (fs.existsSync(path.join(dir, 'requirements.txt'))) {
+        installCmd = '`pip install -r requirements.txt`';
+    }
+    const commands = {
+        install: installCmd,
+        test: testCmd,
+    };
+    if (lintCmd)
+        commands.lint = lintCmd;
+    return { language: 'Python', framework, commands };
+}
+function detectGo(_dir) {
+    return {
+        language: 'Go',
+        framework: 'Go',
+        commands: {
+            install: '`go mod download`',
+            lint: '`golangci-lint run`',
+            test: '`go test ./...`',
+            build: '`go build ./...`',
+        },
+    };
+}
+function renderTemplate(base, info) {
+    let result = base;
+    result = result.replace('[List primary language, framework, and key libraries]', `${info.language} / ${info.framework}`);
+    const cmdLines = [];
+    cmdLines.push(`- Install: ${info.commands.install}`);
+    if (info.commands.typecheck)
+        cmdLines.push(`- Typecheck: ${info.commands.typecheck}`);
+    if (info.commands.lint)
+        cmdLines.push(`- Lint: ${info.commands.lint}`);
+    cmdLines.push(`- Test: ${info.commands.test}`);
+    if (info.commands.build)
+        cmdLines.push(`- Build: ${info.commands.build}`);
+    const cmdSection = result.match(/## Local dev commands\n([\s\S]*?)(?=\n##|\n*$)/);
+    if (cmdSection) {
+        const newCmds = `## Local dev commands\n${cmdLines.join('\n')}\n`;
+        result = result.replace(cmdSection[0], newCmds);
+    }
+    const verifyLines = [];
+    verifyLines.push(`- Run ${info.commands.test} before declaring any task complete`);
+    if (info.commands.typecheck)
+        verifyLines.push(`- Run ${info.commands.typecheck} to catch type errors`);
+    if (base.includes('A task is not done until all of these pass:')) {
+        const exitLines = [];
+        if (info.commands.typecheck)
+            exitLines.push(`- ${info.commands.typecheck} exits 0`);
+        if (info.commands.lint)
+            exitLines.push(`- ${info.commands.lint} exits 0`);
+        exitLines.push(`- ${info.commands.test} exits 0`);
+        if (info.commands.build)
+            exitLines.push(`- ${info.commands.build} exits 0`);
+        const oldVerify = result.match(/A task is not done until all of these pass:\n([\s\S]*?)(?=\n##|\n*$)/);
+        if (oldVerify) {
+            result = result.replace(oldVerify[0], `A task is not done until all of these pass:\n${exitLines.join('\n')}\n`);
+        }
+    }
+    else {
+        const simpleVerify = result.match(/## Verification\n([\s\S]*?)(?=\n##|\n*$)/);
+        if (simpleVerify) {
+            const newVerify = `## Verification\n${verifyLines.join('\n')}\n- Never claim success without checking actual output\n`;
+            result = result.replace(simpleVerify[0], newVerify);
+        }
+    }
+    return result;
+}
+
+
+/***/ }),
+
+/***/ 164:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.discoverFiles = discoverFiles;
+const fs = __importStar(__nccwpck_require__(896));
+const path = __importStar(__nccwpck_require__(928));
+const KNOWN_FILES = [
+    '.github/copilot-instructions.md',
+    '.cursor/rules',
+    '.cursorrules',
+    '.windsurfrules',
+    '.aider/conventions.md',
+    'CONVENTIONS.md',
+];
+function discoverFiles(dir = '.') {
+    const found = [];
+    for (const file of KNOWN_FILES) {
+        const full = path.join(dir, file);
+        if (fs.existsSync(full)) {
+            found.push(full);
+        }
+    }
+    return found;
+}
 
 
 /***/ }),
@@ -607,6 +986,87 @@ function getSafetyRules() {
 
 /***/ }),
 
+/***/ 9:
+/***/ ((__unused_webpack_module, exports) => {
+
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.computeScore = computeScore;
+function computeScore(agentsCheck, claudeCheck, safetyResult) {
+    const breakdown = {};
+    const suggestions = [];
+    let structurePoints = 30;
+    if (!agentsCheck.passed) {
+        structurePoints -= agentsCheck.errors.length * 10;
+        suggestions.push('Fix required section errors in AGENTS.md');
+    }
+    const qualityWarnings = agentsCheck.warnings.filter((w) => w.includes('recommended section') || w.includes('boundary constraints') || w.includes('no executable commands'));
+    structurePoints -= qualityWarnings.length * 3;
+    if (qualityWarnings.some((w) => w.includes('Verification'))) {
+        suggestions.push('Add a Verification section with concrete exit criteria');
+    }
+    if (qualityWarnings.some((w) => w.includes('Boundaries'))) {
+        suggestions.push('Add a Boundaries section with explicit limits');
+    }
+    if (qualityWarnings.some((w) => w.includes('no executable commands'))) {
+        suggestions.push('Add verifiable commands (in backticks) to prose-only sections');
+    }
+    breakdown['Structure'] = Math.max(0, structurePoints);
+    let safetyPoints = 30;
+    const errors = safetyResult.findings.filter((f) => f.severity === 'error');
+    const warns = safetyResult.findings.filter((f) => f.severity === 'warn');
+    safetyPoints -= errors.length * 10;
+    safetyPoints -= warns.length * 3;
+    if (errors.length > 0)
+        suggestions.push(`Fix ${errors.length} safety error(s) — these indicate dangerous patterns`);
+    if (warns.length > 0)
+        suggestions.push(`Review ${warns.length} safety warning(s)`);
+    breakdown['Safety'] = Math.max(0, safetyPoints);
+    let clarityPoints = 20;
+    const lengthWarning = agentsCheck.warnings.find((w) => w.includes('lines'));
+    if (lengthWarning) {
+        clarityPoints -= lengthWarning.includes('300') ? 10 : 5;
+        suggestions.push('Trim instruction file — shorter files correlate with better agent performance');
+    }
+    const ambiguityFindings = safetyResult.findings.filter((f) => f.ruleId === 'ambiguous-hedge');
+    clarityPoints -= ambiguityFindings.length * 2;
+    if (ambiguityFindings.length > 0) {
+        suggestions.push('Replace hedge words ("try to", "where possible") with concrete instructions');
+    }
+    const personaFindings = safetyResult.findings.filter((f) => f.ruleId === 'vague-persona');
+    clarityPoints -= personaFindings.length * 3;
+    breakdown['Clarity'] = Math.max(0, clarityPoints);
+    let consistencyPoints = 20;
+    if (!claudeCheck.passed) {
+        consistencyPoints -= claudeCheck.errors.length * 10;
+        suggestions.push('Fix errors in CLAUDE.md');
+    }
+    consistencyPoints -= claudeCheck.warnings.length * 5;
+    if (claudeCheck.warnings.some((w) => w.includes('reference AGENTS.md'))) {
+        suggestions.push('CLAUDE.md should reference AGENTS.md as source of truth');
+    }
+    if (claudeCheck.warnings.some((w) => w.includes('contradict'))) {
+        suggestions.push('Resolve contradictions between CLAUDE.md and AGENTS.md');
+    }
+    breakdown['Consistency'] = Math.max(0, consistencyPoints);
+    const score = Math.max(0, Math.min(100, breakdown['Structure'] + breakdown['Safety'] + breakdown['Clarity'] + breakdown['Consistency']));
+    let grade;
+    if (score >= 90)
+        grade = 'A';
+    else if (score >= 80)
+        grade = 'B';
+    else if (score >= 70)
+        grade = 'C';
+    else if (score >= 60)
+        grade = 'D';
+    else
+        grade = 'F';
+    return { score, grade, breakdown, suggestions };
+}
+
+
+/***/ }),
+
 /***/ 340:
 /***/ ((__unused_webpack_module, exports) => {
 
@@ -732,6 +1192,13 @@ function getTemplate(name) {
 /***/ ((module) => {
 
 module.exports = require("fs");
+
+/***/ }),
+
+/***/ 928:
+/***/ ((module) => {
+
+module.exports = require("path");
 
 /***/ })
 

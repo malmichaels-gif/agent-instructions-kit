@@ -35,6 +35,10 @@ outputs:
     description: 'Whether safety check passed (true/false)'
   warnings:
     description: 'Number of safety warnings found'
+  score:
+    description: 'Quality score (0-100)'
+  grade:
+    description: 'Quality grade (A-F)'
 
 runs:
   using: 'node20'

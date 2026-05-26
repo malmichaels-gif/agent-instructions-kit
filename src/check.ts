@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import type { CheckResult } from './types.js';
 
 const REQUIRED_SECTIONS = [
@@ -16,24 +17,24 @@ const LINE_ERROR_THRESHOLD = 300;
 
 const BACKTICK_COMMAND = /`[^`]+`/;
 
-export function checkAgentsFile(path: string): CheckResult {
+export function checkAgentsFile(filePath: string): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
-  if (!fs.existsSync(path)) {
+  if (!fs.existsSync(filePath)) {
     return {
       passed: false,
-      errors: [`File not found: ${path}`],
+      errors: [`File not found: ${filePath}`],
       warnings: [],
     };
   }
 
-  const content = fs.readFileSync(path, 'utf-8');
+  const content = fs.readFileSync(filePath, 'utf-8');
 
   if (content.trim().length === 0) {
     return {
       passed: false,
-      errors: [`File is empty: ${path}`],
+      errors: [`File is empty: ${filePath}`],
       warnings: [],
     };
   }
@@ -73,6 +74,12 @@ export function checkAgentsFile(path: string): CheckResult {
     if (section.lineCount >= 4 && !BACKTICK_COMMAND.test(section.body) && !section.heading.toLowerCase().includes('mission')) {
       warnings.push(`Section "${section.heading}" has no executable commands — agents follow instructions with verifiable commands more reliably`);
     }
+  }
+
+  const dir = path.dirname(filePath);
+  const brokenCmds = validateCommands(content, dir);
+  for (const cmd of brokenCmds) {
+    warnings.push(`Referenced command \`${cmd}\` does not appear to exist in this project`);
   }
 
   return {
@@ -194,4 +201,40 @@ function hasContradiction(bodyA: string, bodyB: string): boolean {
 
   if ((negationsA.length > 0) !== (negationsB.length > 0)) return true;
   return false;
+}
+
+const NPM_SCRIPT_PATTERN = /npm\s+(run\s+)?(\w[\w-]*)/g;
+
+function validateCommands(content: string, dir: string): string[] {
+  const broken: string[] = [];
+
+  const pkgPath = path.join(dir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      const scripts: Record<string, string> = pkg.scripts || {};
+      const builtins = new Set(['test', 'start', 'install', 'publish', 'pack', 'init', 'version']);
+
+      for (const match of content.matchAll(NPM_SCRIPT_PATTERN)) {
+        const hasRun = !!match[1];
+        const script = match[2];
+        if (!hasRun && builtins.has(script)) continue;
+        if (hasRun && !scripts[script]) {
+          broken.push(`npm run ${script}`);
+        }
+      }
+    } catch {
+      // Skip if package.json is invalid
+    }
+  }
+
+  if (fs.existsSync(path.join(dir, 'Cargo.toml'))) {
+    // Cargo commands are built-in — always valid
+  }
+
+  if (fs.existsSync(path.join(dir, 'go.mod'))) {
+    // Go commands are built-in — always valid
+  }
+
+  return broken;
 }

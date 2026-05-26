@@ -83,6 +83,8 @@ jobs:
 
 ## What `init` generates
 
+`init` auto-detects your stack (Node.js, Rust, Python, Go) and pre-fills templates with real commands, framework, and language — no placeholder editing needed.
+
 You get two template flavors:
 
 * **minimal**: essentials — mission, stack, commands, verification, boundaries
@@ -100,7 +102,7 @@ npx agent-instructions-kit init --template opinionated
 
 ### `init`
 
-Generates AGENTS.md + CLAUDE.md using a single template source.
+Generates AGENTS.md + CLAUDE.md. Auto-detects your project stack and fills in real commands.
 
 ### `check`
 
@@ -170,6 +172,42 @@ Example — run both checks, warn only:
   with:
     mode: "all"
     fail_on_safety: "false"
+```
+
+### `score`
+
+Grades your instruction files on a 100-point scale (A through F) across four categories:
+
+* **Structure** (30 pts) — required sections, recommended sections, boundary constraints, executable commands
+* **Safety** (30 pts) — no dangerous patterns, no leaked secrets
+* **Clarity** (20 pts) — file length, no ambiguous language, no vague personas
+* **Consistency** (20 pts) — CLAUDE.md references and aligns with AGENTS.md
+
+```bash
+npx agent-instructions-kit score
+npx agent-instructions-kit score --json   # machine-readable output
+```
+
+### `--json` output
+
+All commands except `init` support `--json` for structured output:
+
+```bash
+npx agent-instructions-kit check --json
+npx agent-instructions-kit safety --json
+```
+
+### `--discover` (multi-file)
+
+`safety --discover` scans additional agent config files alongside AGENTS.md:
+
+* `.github/copilot-instructions.md`
+* `.cursor/rules`, `.cursorrules`
+* `.windsurfrules`
+* `.aider/conventions.md`
+
+```bash
+npx agent-instructions-kit safety --discover
 ```
 
 ---

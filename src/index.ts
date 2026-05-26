@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import { checkAgentsFile, checkClaudeFile } from './check.js';
 import { runSafetyCheck } from './safety.js';
+import { computeScore } from './score.js';
 import type { Config } from './types.js';
 
 async function run(): Promise<void> {
@@ -68,10 +69,17 @@ async function run(): Promise<void> {
       }
     }
 
-    // Set outputs
+    const agentsResult = checkAgentsFile(config.agentsPath);
+    const claudeResult = checkClaudeFile(config.claudePath, config.agentsPath);
+    const safetyResult = runSafetyCheck(config.agentsPath);
+    const scoreResult = computeScore(agentsResult, claudeResult, safetyResult);
+
     core.setOutput('check_passed', checkPassed.toString());
     core.setOutput('safety_passed', safetyPassed.toString());
     core.setOutput('warnings', totalWarnings.toString());
+    core.setOutput('score', scoreResult.score.toString());
+    core.setOutput('grade', scoreResult.grade);
+    core.info(`Quality: ${scoreResult.grade} (${scoreResult.score}/100)`);
 
     if (!checkPassed) {
       core.setFailed('Check failed: missing required sections or invalid files');
