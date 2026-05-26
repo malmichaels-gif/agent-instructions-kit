@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-25
+
 ### Added
 - `score` command — grades instruction files A through F across Structure, Safety, Clarity, and Consistency (100-point scale)
 - `--json` output mode for `check`, `safety`, and `score` commands
