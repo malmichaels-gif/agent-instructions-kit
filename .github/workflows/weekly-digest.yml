@@ -18,4 +18,4 @@ jobs:
         uses: malmichaels-gif/community-digest-action@v0
         with:
           discussion_category: "Announcements"
-          min_activity: "1"  # TODO: Change to 3 after first successful post
+          min_activity: "3"

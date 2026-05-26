@@ -1,0 +1,25 @@
+name: Safety Rule Bypass
+description: Report a pattern that should be flagged but isn't
+labels: ["bug", "safety"]
+body:
+  - type: textarea
+    id: pattern
+    attributes:
+      label: Unflagged pattern
+      description: What text in an instruction file should have been caught?
+      placeholder: |
+        Example line from AGENTS.md that wasn't flagged...
+    validations:
+      required: true
+  - type: textarea
+    id: risk
+    attributes:
+      label: Why is this dangerous?
+      description: What could an agent do if it followed this instruction?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested rule (optional)
+      description: If you have a regex or rule ID in mind, include it here.

@@ -112,18 +112,56 @@ Validates:
 
 ### `safety`
 
-Flags suspicious patterns commonly used for instruction hijacking or bad behavior, like:
+Flags suspicious patterns commonly used for instruction hijacking or bad behavior.
 
-* "ignore previous instructions"
-* "print env vars / secrets"
-* "upload repo contents"
-* "curl | bash from random URL"
-* "disable security checks"
+#### What gets flagged
 
-You choose whether safety findings:
+| Rule ID                | Severity | What it catches                            | Example trigger                            |
+| ---------------------- | -------- | ------------------------------------------ | ------------------------------------------ |
+| `ignore-instructions`  | error    | Prompt injection attempts                  | "ignore previous instructions"             |
+| `print-secrets`        | error    | Credential exfiltration                    | "print env vars", "print api keys"         |
+| `upload-repo`          | error    | Repository exfiltration                    | "upload repository contents"               |
+| `exfiltrate`           | error    | Generic data exfiltration                  | "send data to external server"             |
+| `override-instructions`| error    | Overriding system prompts                  | "override system instructions"             |
+| `new-identity`         | error    | Agent identity hijacking                   | "you are now", "forget you are"            |
+| `hidden-instructions`  | error    | Malicious HTML comments                    | `<!-- ignore all rules -->`                |
+| `mcp-tool-abuse`       | error    | Destructive MCP tool calls                 | "use_mcp_tool to delete"                   |
+| `curl-bash`            | warn     | Piping untrusted URLs to shell             | `curl https://... \| bash`                 |
+| `disable-security`     | warn     | Disabling security controls                | "disable verification", "disable checks"   |
+| `base64-obfuscation`   | warn     | Encoded/obfuscated payloads                | "base64 decode", "eval(atob(...))"         |
+| `webhook-exfil`        | warn     | Sending data to external services          | "send to webhook", "post data to http"     |
 
-* **warn** (default)
-* **fail** CI (`fail_on_safety: true`)
+Rules with severity **error** cause `safety` to report `passed: false`. Rules with severity **warn** are reported but don't fail the check.
+
+You choose whether safety failures block CI:
+
+* **warn only** (default) — findings are reported but CI passes
+* **fail CI** (`fail_on_safety: true`) — errors block the pipeline
+
+#### `fail_on_safety` behavior
+
+| `fail_on_safety` | Error-level finding | Warn-level finding | CI result |
+| ----------------- | ------------------- | ------------------- | --------- |
+| `false` (default) | Reported as warning  | Reported as warning  | Pass      |
+| `true`            | Reported as error    | Reported as warning  | **Fail**  |
+
+Example — fail CI on safety errors:
+
+```yaml
+- uses: malmichaels-gif/agent-instructions-kit@v0
+  with:
+    mode: "safety"
+    fail_on_safety: "true"
+```
+
+Example — run both checks, warn only:
+
+```yaml
+- uses: malmichaels-gif/agent-instructions-kit@v0
+  with:
+    mode: "all"
+    fail_on_safety: "false"
+```
 
 ---
 
