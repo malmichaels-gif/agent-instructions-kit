@@ -388,23 +388,35 @@ function runFixCommand(args: string[]): void {
     return;
   }
 
-  if (report.applied.length === 0) {
+  if (report.applied.length === 0 && report.skipped.length === 0) {
     console.log('No auto-fixable issues found.');
     process.exit(0);
     return;
   }
 
-  const verb = dryRun ? 'Would fix' : 'Fixed';
-  console.log(`${verb} ${report.applied.length} issue(s):`);
-  for (const action of report.applied) {
-    const loc = action.lineNumber !== null ? `Line ${action.lineNumber}` : 'end of file';
-    console.log(`  [${action.type}] ${action.path} (${loc}): ${action.description}`);
+  if (report.applied.length > 0) {
+    const verb = dryRun ? 'Would fix' : 'Fixed';
+    console.log(`${verb} ${report.applied.length} issue(s):`);
+    for (const action of report.applied) {
+      const loc = action.lineNumber !== null ? `Line ${action.lineNumber}` : 'end of file';
+      console.log(`  [${action.type}] ${action.path} (${loc}): ${action.description}`);
+    }
   }
 
-  if (dryRun) {
-    console.log('\nDry run — no files were written. Re-run without --dry-run to apply.');
-  } else {
-    console.log('\nFiles updated. Review the changes and re-run `check` / `safety` to confirm.');
+  if (report.skipped.length > 0) {
+    console.log(`\n${report.skipped.length} issue(s) need manual review (not auto-fixed):`);
+    for (const action of report.skipped) {
+      const loc = action.lineNumber !== null ? `Line ${action.lineNumber}` : 'end of file';
+      console.log(`  [${action.type}] ${action.path} (${loc}): ${action.description}`);
+    }
+  }
+
+  if (report.applied.length > 0) {
+    if (dryRun) {
+      console.log('\nDry run — no files were written. Re-run without --dry-run to apply.');
+    } else {
+      console.log('\nFiles updated. Review the changes and re-run `check` / `safety` to confirm.');
+    }
   }
   process.exit(0);
 }

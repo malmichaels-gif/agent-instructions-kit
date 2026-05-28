@@ -747,22 +747,33 @@ function runFixCommand(args) {
         process.exit(0);
         return;
     }
-    if (report.applied.length === 0) {
+    if (report.applied.length === 0 && report.skipped.length === 0) {
         console.log('No auto-fixable issues found.');
         process.exit(0);
         return;
     }
-    const verb = dryRun ? 'Would fix' : 'Fixed';
-    console.log(`${verb} ${report.applied.length} issue(s):`);
-    for (const action of report.applied) {
-        const loc = action.lineNumber !== null ? `Line ${action.lineNumber}` : 'end of file';
-        console.log(`  [${action.type}] ${action.path} (${loc}): ${action.description}`);
+    if (report.applied.length > 0) {
+        const verb = dryRun ? 'Would fix' : 'Fixed';
+        console.log(`${verb} ${report.applied.length} issue(s):`);
+        for (const action of report.applied) {
+            const loc = action.lineNumber !== null ? `Line ${action.lineNumber}` : 'end of file';
+            console.log(`  [${action.type}] ${action.path} (${loc}): ${action.description}`);
+        }
     }
-    if (dryRun) {
-        console.log('\nDry run — no files were written. Re-run without --dry-run to apply.');
+    if (report.skipped.length > 0) {
+        console.log(`\n${report.skipped.length} issue(s) need manual review (not auto-fixed):`);
+        for (const action of report.skipped) {
+            const loc = action.lineNumber !== null ? `Line ${action.lineNumber}` : 'end of file';
+            console.log(`  [${action.type}] ${action.path} (${loc}): ${action.description}`);
+        }
     }
-    else {
-        console.log('\nFiles updated. Review the changes and re-run `check` / `safety` to confirm.');
+    if (report.applied.length > 0) {
+        if (dryRun) {
+            console.log('\nDry run — no files were written. Re-run without --dry-run to apply.');
+        }
+        else {
+            console.log('\nFiles updated. Review the changes and re-run `check` / `safety` to confirm.');
+        }
     }
     process.exit(0);
 }
@@ -1637,7 +1648,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.fixAgentsContent = fixAgentsContent;
 exports.fixClaudeContent = fixClaudeContent;
 exports.redactSecrets = redactSecrets;
-exports.replaceHedgeWords = replaceHedgeWords;
+exports.detectHedgeWords = detectHedgeWords;
 exports.addMissingRequiredSections = addMissingRequiredSections;
 exports.addAgentsReference = addAgentsReference;
 exports.runFix = runFix;
@@ -1666,16 +1677,18 @@ const SECRET_RULES = [
     },
 ];
 const REDACTED = '[REDACTED]';
-// Hedge-word replacements (mirrors ambiguous-hedge rule in safety.ts). Maps each
-// vague phrase to a concrete, verifiable alternative.
-const HEDGE_REPLACEMENTS = [
-    { pattern: /\btry to\b/gi, replacement: 'do' },
-    { pattern: /\bwhere possible\b/gi, replacement: 'ensure' },
-    { pattern: /\bif appropriate\b/gi, replacement: 'must' },
-    { pattern: /\bwhen feasible\b/gi, replacement: 'must' },
-    { pattern: /\bas needed\b/gi, replacement: 'must' },
-    { pattern: /\bideally\b/gi, replacement: 'must' },
-    { pattern: /\boptionally\b/gi, replacement: 'must' },
+// Ambiguous hedge phrases (mirrors the ambiguous-hedge rule in safety.ts). These
+// are deliberately NOT auto-replaced: a blind token swap mangles grammar (e.g.
+// "add tests where possible" -> "add tests ensure"). Instead `fix` flags each
+// occurrence as a warning so the author can reword it into a concrete requirement.
+const HEDGE_PHRASES = [
+    { pattern: /\btry to\b/gi, suggestion: 'state the action directly' },
+    { pattern: /\bwhere possible\b/gi, suggestion: 'state when it is required' },
+    { pattern: /\bif appropriate\b/gi, suggestion: 'state the condition' },
+    { pattern: /\bwhen feasible\b/gi, suggestion: 'state the condition' },
+    { pattern: /\bas needed\b/gi, suggestion: 'state the condition' },
+    { pattern: /\bideally\b/gi, suggestion: 'state the requirement' },
+    { pattern: /\boptionally\b/gi, suggestion: 'state whether it is required' },
 ];
 function fixAgentsContent(content, filePath) {
     const actions = [];
@@ -1683,13 +1696,11 @@ function fixAgentsContent(content, filePath) {
     const redaction = redactSecrets(result, filePath);
     result = redaction.content;
     actions.push(...redaction.actions);
-    const hedges = replaceHedgeWords(result, filePath);
-    result = hedges.content;
-    actions.push(...hedges.actions);
+    const warnings = detectHedgeWords(result, filePath);
     const sections = addMissingRequiredSections(result, filePath);
     result = sections.content;
     actions.push(...sections.actions);
-    return { content: result, actions };
+    return { content: result, actions, warnings };
 }
 function fixClaudeContent(content, filePath) {
     const actions = [];
@@ -1697,13 +1708,11 @@ function fixClaudeContent(content, filePath) {
     const redaction = redactSecrets(result, filePath);
     result = redaction.content;
     actions.push(...redaction.actions);
-    const hedges = replaceHedgeWords(result, filePath);
-    result = hedges.content;
-    actions.push(...hedges.actions);
+    const warnings = detectHedgeWords(result, filePath);
     const ref = addAgentsReference(result, filePath);
     result = ref.content;
     actions.push(...ref.actions);
-    return { content: result, actions };
+    return { content: result, actions, warnings };
 }
 function redactSecrets(content, filePath) {
     const actions = [];
@@ -1739,32 +1748,28 @@ function redactSecrets(content, filePath) {
     }
     return { content: lines.join('\n'), actions };
 }
-function replaceHedgeWords(content, filePath) {
-    const actions = [];
+// Flags ambiguous hedge phrases without modifying content. Rewording vague prose
+// into a concrete requirement needs human judgement, so these are reported as
+// warnings (FixReport.skipped) rather than auto-applied.
+function detectHedgeWords(content, filePath) {
+    const warnings = [];
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
-        let line = lines[i];
-        for (const { pattern, replacement } of HEDGE_REPLACEMENTS) {
+        for (const { pattern, suggestion } of HEDGE_PHRASES) {
             pattern.lastIndex = 0;
-            if (!pattern.test(line))
-                continue;
-            const before = line;
-            pattern.lastIndex = 0;
-            line = line.replace(pattern, replacement);
-            if (line !== before) {
-                actions.push({
+            for (const match of lines[i].matchAll(pattern)) {
+                warnings.push({
                     type: 'replace-hedge',
                     path: filePath,
                     lineNumber: i + 1,
-                    oldValue: before,
-                    newValue: line,
-                    description: 'Replaced ambiguous hedge word with concrete language',
+                    oldValue: lines[i],
+                    newValue: '',
+                    description: `Ambiguous hedge word "${match[0]}" — reword manually (${suggestion})`,
                 });
             }
         }
-        lines[i] = line;
     }
-    return { content: lines.join('\n'), actions };
+    return warnings;
 }
 function addMissingRequiredSections(content, filePath) {
     const actions = [];
@@ -1817,30 +1822,29 @@ function addAgentsReference(content, filePath) {
 function runFix(options) {
     const { agentsPath, claudePath, dryRun } = options;
     const applied = [];
+    const skipped = [];
     if (fs.existsSync(agentsPath)) {
         const content = fs.readFileSync(agentsPath, 'utf-8');
-        const { content: fixed, actions } = fixAgentsContent(content, agentsPath);
-        if (actions.length > 0) {
-            if (!dryRun && fixed !== content) {
-                fs.writeFileSync(agentsPath, fixed);
-            }
-            applied.push(...actions);
+        const { content: fixed, actions, warnings } = fixAgentsContent(content, agentsPath);
+        if (!dryRun && fixed !== content) {
+            fs.writeFileSync(agentsPath, fixed);
         }
+        applied.push(...actions);
+        skipped.push(...warnings);
     }
     if (fs.existsSync(claudePath)) {
         const content = fs.readFileSync(claudePath, 'utf-8');
-        const { content: fixed, actions } = fixClaudeContent(content, claudePath);
-        if (actions.length > 0) {
-            if (!dryRun && fixed !== content) {
-                fs.writeFileSync(claudePath, fixed);
-            }
-            applied.push(...actions);
+        const { content: fixed, actions, warnings } = fixClaudeContent(content, claudePath);
+        if (!dryRun && fixed !== content) {
+            fs.writeFileSync(claudePath, fixed);
         }
+        applied.push(...actions);
+        skipped.push(...warnings);
     }
     return {
         passed: true,
         applied,
-        skipped: [],
+        skipped,
         dryRun,
     };
 }

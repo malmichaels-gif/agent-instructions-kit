@@ -297,10 +297,9 @@ Auto-fixes the common issues the linter catches (like `eslint --fix`). It applie
 
 * **Adds missing required sections** (`## Mission`, `## Local dev commands`) with starter stubs
 * **Redacts detected secrets** — leaked AWS keys, generic API keys/tokens, private keys, and JWTs are replaced with `[REDACTED]`
-* **Replaces ambiguous hedge words** with concrete language (`try to` → `do`, `where possible` → `ensure`, `if appropriate`/`when feasible`/`as needed`/`ideally`/`optionally` → `must`)
 * **Adds the AGENTS.md reference** to CLAUDE.md when it's missing
 
-It does **not** rewrite boundary/constraint decisions or section content beyond structure — run `check` and `score` for those.
+It also **flags ambiguous hedge words** (`try to`, `where possible`, `if appropriate`, …) for manual review, but does **not** rewrite them — turning vague prose into a concrete requirement needs your judgement, and a blind word swap mangles grammar. It does **not** rewrite boundary/constraint decisions or section content beyond structure either — run `check` and `score` for those.
 
 ```bash
 npx agent-instructions-kit fix

@@ -17,10 +17,15 @@ interface FileFix {
     content: string;
     actions: FixAction[];
 }
-export declare function fixAgentsContent(content: string, filePath: string): FileFix;
-export declare function fixClaudeContent(content: string, filePath: string): FileFix;
+interface ContentFix {
+    content: string;
+    actions: FixAction[];
+    warnings: FixAction[];
+}
+export declare function fixAgentsContent(content: string, filePath: string): ContentFix;
+export declare function fixClaudeContent(content: string, filePath: string): ContentFix;
 export declare function redactSecrets(content: string, filePath: string): FileFix;
-export declare function replaceHedgeWords(content: string, filePath: string): FileFix;
+export declare function detectHedgeWords(content: string, filePath: string): FixAction[];
 export declare function addMissingRequiredSections(content: string, filePath: string): FileFix;
 export declare function addAgentsReference(content: string, filePath: string): FileFix;
 export interface RunFixOptions {

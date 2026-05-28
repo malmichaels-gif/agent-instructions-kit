@@ -51,16 +51,18 @@ const SECRET_RULES: { id: string; pattern: RegExp }[] = [
 
 const REDACTED = '[REDACTED]';
 
-// Hedge-word replacements (mirrors ambiguous-hedge rule in safety.ts). Maps each
-// vague phrase to a concrete, verifiable alternative.
-const HEDGE_REPLACEMENTS: { pattern: RegExp; replacement: string }[] = [
-  { pattern: /\btry to\b/gi, replacement: 'do' },
-  { pattern: /\bwhere possible\b/gi, replacement: 'ensure' },
-  { pattern: /\bif appropriate\b/gi, replacement: 'must' },
-  { pattern: /\bwhen feasible\b/gi, replacement: 'must' },
-  { pattern: /\bas needed\b/gi, replacement: 'must' },
-  { pattern: /\bideally\b/gi, replacement: 'must' },
-  { pattern: /\boptionally\b/gi, replacement: 'must' },
+// Ambiguous hedge phrases (mirrors the ambiguous-hedge rule in safety.ts). These
+// are deliberately NOT auto-replaced: a blind token swap mangles grammar (e.g.
+// "add tests where possible" -> "add tests ensure"). Instead `fix` flags each
+// occurrence as a warning so the author can reword it into a concrete requirement.
+const HEDGE_PHRASES: { pattern: RegExp; suggestion: string }[] = [
+  { pattern: /\btry to\b/gi, suggestion: 'state the action directly' },
+  { pattern: /\bwhere possible\b/gi, suggestion: 'state when it is required' },
+  { pattern: /\bif appropriate\b/gi, suggestion: 'state the condition' },
+  { pattern: /\bwhen feasible\b/gi, suggestion: 'state the condition' },
+  { pattern: /\bas needed\b/gi, suggestion: 'state the condition' },
+  { pattern: /\bideally\b/gi, suggestion: 'state the requirement' },
+  { pattern: /\boptionally\b/gi, suggestion: 'state whether it is required' },
 ];
 
 interface FileFix {
@@ -68,7 +70,13 @@ interface FileFix {
   actions: FixAction[];
 }
 
-export function fixAgentsContent(content: string, filePath: string): FileFix {
+interface ContentFix {
+  content: string;
+  actions: FixAction[];
+  warnings: FixAction[];
+}
+
+export function fixAgentsContent(content: string, filePath: string): ContentFix {
   const actions: FixAction[] = [];
   let result = content;
 
@@ -76,18 +84,16 @@ export function fixAgentsContent(content: string, filePath: string): FileFix {
   result = redaction.content;
   actions.push(...redaction.actions);
 
-  const hedges = replaceHedgeWords(result, filePath);
-  result = hedges.content;
-  actions.push(...hedges.actions);
+  const warnings = detectHedgeWords(result, filePath);
 
   const sections = addMissingRequiredSections(result, filePath);
   result = sections.content;
   actions.push(...sections.actions);
 
-  return { content: result, actions };
+  return { content: result, actions, warnings };
 }
 
-export function fixClaudeContent(content: string, filePath: string): FileFix {
+export function fixClaudeContent(content: string, filePath: string): ContentFix {
   const actions: FixAction[] = [];
   let result = content;
 
@@ -95,15 +101,13 @@ export function fixClaudeContent(content: string, filePath: string): FileFix {
   result = redaction.content;
   actions.push(...redaction.actions);
 
-  const hedges = replaceHedgeWords(result, filePath);
-  result = hedges.content;
-  actions.push(...hedges.actions);
+  const warnings = detectHedgeWords(result, filePath);
 
   const ref = addAgentsReference(result, filePath);
   result = ref.content;
   actions.push(...ref.actions);
 
-  return { content: result, actions };
+  return { content: result, actions, warnings };
 }
 
 export function redactSecrets(content: string, filePath: string): FileFix {
@@ -142,33 +146,30 @@ export function redactSecrets(content: string, filePath: string): FileFix {
   return { content: lines.join('\n'), actions };
 }
 
-export function replaceHedgeWords(content: string, filePath: string): FileFix {
-  const actions: FixAction[] = [];
+// Flags ambiguous hedge phrases without modifying content. Rewording vague prose
+// into a concrete requirement needs human judgement, so these are reported as
+// warnings (FixReport.skipped) rather than auto-applied.
+export function detectHedgeWords(content: string, filePath: string): FixAction[] {
+  const warnings: FixAction[] = [];
   const lines = content.split('\n');
 
   for (let i = 0; i < lines.length; i++) {
-    let line = lines[i];
-    for (const { pattern, replacement } of HEDGE_REPLACEMENTS) {
+    for (const { pattern, suggestion } of HEDGE_PHRASES) {
       pattern.lastIndex = 0;
-      if (!pattern.test(line)) continue;
-      const before = line;
-      pattern.lastIndex = 0;
-      line = line.replace(pattern, replacement);
-      if (line !== before) {
-        actions.push({
+      for (const match of lines[i].matchAll(pattern)) {
+        warnings.push({
           type: 'replace-hedge',
           path: filePath,
           lineNumber: i + 1,
-          oldValue: before,
-          newValue: line,
-          description: 'Replaced ambiguous hedge word with concrete language',
+          oldValue: lines[i],
+          newValue: '',
+          description: `Ambiguous hedge word "${match[0]}" — reword manually (${suggestion})`,
         });
       }
     }
-    lines[i] = line;
   }
 
-  return { content: lines.join('\n'), actions };
+  return warnings;
 }
 
 export function addMissingRequiredSections(content: string, filePath: string): FileFix {
@@ -236,33 +237,32 @@ export interface RunFixOptions {
 export function runFix(options: RunFixOptions): FixReport {
   const { agentsPath, claudePath, dryRun } = options;
   const applied: FixAction[] = [];
+  const skipped: FixAction[] = [];
 
   if (fs.existsSync(agentsPath)) {
     const content = fs.readFileSync(agentsPath, 'utf-8');
-    const { content: fixed, actions } = fixAgentsContent(content, agentsPath);
-    if (actions.length > 0) {
-      if (!dryRun && fixed !== content) {
-        fs.writeFileSync(agentsPath, fixed);
-      }
-      applied.push(...actions);
+    const { content: fixed, actions, warnings } = fixAgentsContent(content, agentsPath);
+    if (!dryRun && fixed !== content) {
+      fs.writeFileSync(agentsPath, fixed);
     }
+    applied.push(...actions);
+    skipped.push(...warnings);
   }
 
   if (fs.existsSync(claudePath)) {
     const content = fs.readFileSync(claudePath, 'utf-8');
-    const { content: fixed, actions } = fixClaudeContent(content, claudePath);
-    if (actions.length > 0) {
-      if (!dryRun && fixed !== content) {
-        fs.writeFileSync(claudePath, fixed);
-      }
-      applied.push(...actions);
+    const { content: fixed, actions, warnings } = fixClaudeContent(content, claudePath);
+    if (!dryRun && fixed !== content) {
+      fs.writeFileSync(claudePath, fixed);
     }
+    applied.push(...actions);
+    skipped.push(...warnings);
   }
 
   return {
     passed: true,
     applied,
-    skipped: [],
+    skipped,
     dryRun,
   };
 }

@@ -5,7 +5,7 @@ import {
   runFix,
   addMissingRequiredSections,
   redactSecrets,
-  replaceHedgeWords,
+  detectHedgeWords,
   addAgentsReference,
 } from './fix.js';
 
@@ -89,28 +89,31 @@ describe('redactSecrets', () => {
   });
 });
 
-describe('replaceHedgeWords', () => {
-  it('replaces "try to" with "do"', () => {
-    const { content } = replaceHedgeWords('Try to keep functions small.', 'AGENTS.md');
-    expect(content).toBe('do keep functions small.');
+describe('detectHedgeWords', () => {
+  it('flags "try to" as a manual-review warning', () => {
+    const warnings = detectHedgeWords('Try to keep functions small.', 'AGENTS.md');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].type).toBe('replace-hedge');
+    expect(warnings[0].description.toLowerCase()).toContain('try to');
+    // Detection only — never rewrites content (the oldValue is the original line).
+    expect(warnings[0].newValue).toBe('');
+    expect(warnings[0].oldValue).toBe('Try to keep functions small.');
   });
 
-  it('replaces "where possible" with "ensure"', () => {
-    const { content } = replaceHedgeWords('Add tests where possible.', 'AGENTS.md');
-    expect(content).toBe('Add tests ensure.');
+  it('flags each hedge phrase on a line', () => {
+    const warnings = detectHedgeWords('Optionally refactor as needed.', 'AGENTS.md');
+    expect(warnings.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('replaces multiple hedge words and reports each', () => {
-    const { content, actions } = replaceHedgeWords('Optionally refactor as needed.', 'AGENTS.md');
-    expect(content).toBe('must refactor must.');
-    expect(actions.length).toBeGreaterThanOrEqual(2);
+  it('records the correct line number', () => {
+    const warnings = detectHedgeWords('# AGENTS.md\n\nAdd tests where possible.', 'AGENTS.md');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].lineNumber).toBe(3);
   });
 
-  it('leaves clean content untouched', () => {
-    const input = 'Run `npm test` before every commit.';
-    const { content, actions } = replaceHedgeWords(input, 'AGENTS.md');
-    expect(content).toBe(input);
-    expect(actions).toHaveLength(0);
+  it('returns nothing for clean content', () => {
+    const warnings = detectHedgeWords('Run `npm test` before every commit.', 'AGENTS.md');
+    expect(warnings).toHaveLength(0);
   });
 });
 
@@ -153,7 +156,9 @@ describe('runFix', () => {
     const agentsOut = fs.readFileSync(agentsPath, 'utf-8');
     expect(agentsOut).toMatch(/^##\s+Mission/m);
     expect(agentsOut).toMatch(/^##\s+Local dev commands/m);
-    expect(agentsOut).toContain('do use Node.');
+    // Hedge words are flagged, not rewritten — the prose is left intact.
+    expect(agentsOut).toContain('Try to use Node.');
+    expect(report.skipped.some((a) => a.type === 'replace-hedge')).toBe(true);
 
     const claudeOut = fs.readFileSync(claudePath, 'utf-8');
     expect(claudeOut).toContain('AGENTS.md');
@@ -177,10 +182,11 @@ describe('runFix', () => {
     const claudePath = path.join(TEST_DIR, 'CLAUDE.md');
 
     const report = runFix({ agentsPath, claudePath, dryRun: false });
-    const types = new Set(report.applied.map((a) => a.type));
-    expect(types.has('redact-secret')).toBe(true);
-    expect(types.has('replace-hedge')).toBe(true);
-    expect(types.has('add-section')).toBe(true);
+    const appliedTypes = new Set(report.applied.map((a) => a.type));
+    expect(appliedTypes.has('redact-secret')).toBe(true);
+    expect(appliedTypes.has('add-section')).toBe(true);
+    // Hedge words are reported as manual-review warnings, not applied fixes.
+    expect(report.skipped.some((a) => a.type === 'replace-hedge')).toBe(true);
 
     const out = fs.readFileSync(agentsPath, 'utf-8');
     expect(out).not.toContain('AKIAIOSFODNN7EXAMPLE');
