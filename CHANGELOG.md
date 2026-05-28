@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-28
+
+### Security
+- Pin `undici` to `^6.26.0` via npm `overrides` to clear high-severity advisories pulled in transitively through `@actions/core` → `@actions/http-client`. `npm audit` is now clean. (#16)
+
+### Changed
+- Migrate GitHub Actions to the Node 24 runtime ahead of the June 2026 Node 20 deprecation: `actions/checkout` v4→v5, `actions/setup-node` v4→v6, `softprops/action-gh-release` v2→v3, and `action.yml` `using: node20`→`node24`. (#14)
+
+### Build
+- Normalize `dist/` to LF via a postbuild step (`scripts/normalize-dist.mjs`) plus `.gitattributes`, so the bundle is byte-reproducible across Windows/macOS/Linux and the CI freshness check passes regardless of contributor OS. Also fixed the freshness check to exclude the top-level `dist/*.map`. (#15)
+
 ## [0.4.0] - 2026-05-28
 
 ### Added

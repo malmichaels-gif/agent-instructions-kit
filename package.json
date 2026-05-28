@@ -1,6 +1,6 @@
 {
   "name": "agent-instructions-kit",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Keep your repo's agent instructions consistent and safe",
   "main": "dist/index.js",
   "files": [
