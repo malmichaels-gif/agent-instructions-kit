@@ -321,52 +321,60 @@ describe('CLI integration', () => {
       '# AGENTS.md\n\n## Mission\nDo stuff.\n\n## Local dev commands\n- `npm test`\n',
     );
 
-    const child = spawn('npx', ['tsx', CLI, 'watch', '--debounce', '50'], {
-      cwd: TEST_DIR,
-      shell: true,
-    });
+    // Spawn the long-running watcher via the resolved tsx binary. On POSIX we
+    // avoid a wrapping shell so SIGINT reaches the node process directly — a
+    // shell may not forward the signal, leaving the watcher alive and the test
+    // hanging until timeout (the flake that failed on Linux CI). On Windows the
+    // .cmd shim still requires a shell.
+    const onWindows = process.platform === 'win32';
+    const child = spawn(
+      onWindows ? 'npx' : TSX_BIN,
+      onWindows
+        ? ['tsx', CLI, 'watch', '--debounce', '50']
+        : [CLI, 'watch', '--debounce', '50'],
+      { cwd: TEST_DIR, shell: onWindows },
+    );
 
     let out = '';
     child.stdout.on('data', (d) => {
       out += d.toString();
     });
 
-    // Wait for the watcher to print its initial grade and be ready.
-    await new Promise<void>((resolve) => {
-      const check = setInterval(() => {
-        if (out.includes('Initial Grade') && out.includes('Press Ctrl+C')) {
+    // Resolves as soon as `needle` appears in the output, or after `timeoutMs`
+    // (so a slow/failed run produces a clear assertion failure, never a hang).
+    const waitFor = (needle: string, timeoutMs: number) =>
+      new Promise<void>((resolve) => {
+        const check = setInterval(() => {
+          if (out.includes(needle)) {
+            clearInterval(check);
+            resolve();
+          }
+        }, 50);
+        setTimeout(() => {
           clearInterval(check);
           resolve();
-        }
-      }, 50);
-      setTimeout(() => {
-        clearInterval(check);
-        resolve();
-      }, 8000);
-    });
+        }, timeoutMs);
+      });
 
+    // Wait for the watcher to be ready (tsx cold-start can be slow in CI).
+    await waitFor('Press Ctrl+C', 20000);
     expect(out).toContain('Initial Grade');
 
     // Trigger a change and wait for the debounced re-score line.
     fs.appendFileSync(agents, '\n## Verification\n- Run `npm test`\n');
+    await waitFor('changed -> Grade:', 15000);
+    expect(out).toContain('changed -> Grade:');
 
-    await new Promise<void>((resolve) => {
-      const check = setInterval(() => {
-        if (out.includes('changed -> Grade:')) {
-          clearInterval(check);
-          resolve();
-        }
-      }, 50);
+    // Stop the watcher, force-killing if SIGINT is not honoured promptly so the
+    // test can never hang on the exit wait.
+    const exited = new Promise<void>((resolve) => {
+      child.on('exit', () => resolve());
       setTimeout(() => {
-        clearInterval(check);
+        child.kill('SIGKILL');
         resolve();
-      }, 8000);
+      }, 5000);
     });
-
-    const exited = new Promise<void>((resolve) => child.on('exit', () => resolve()));
     child.kill('SIGINT');
     await exited;
-
-    expect(out).toContain('changed -> Grade:');
-  }, 25000);
+  }, 45000);
 });
