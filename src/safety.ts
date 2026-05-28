@@ -1,5 +1,11 @@
 import * as fs from 'fs';
-import type { SafetyRule, SafetyResult, SafetyFinding } from './types.js';
+import type {
+  SafetyRule,
+  SafetyResult,
+  SafetyFinding,
+  AIKSafetyConfig,
+} from './types.js';
+import { compileCustomPattern } from './config.js';
 
 const SAFETY_RULES: SafetyRule[] = [
   {
@@ -125,7 +131,52 @@ function loadIgnoredRules(ignorePath: string): Set<string> {
   );
 }
 
-export function runSafetyCheck(path: string, ignorePath = '.aikignore'): SafetyResult {
+// Build the effective rule set from the built-in rules plus optional config:
+//   - severityOverrides remap a built-in rule's severity ('off' drops it),
+//   - customRules are appended (a custom rule whose id matches a built-in rule
+//     overrides that built-in — custom takes precedence),
+//   - rules listed in `ignored` (from .aikignore + config.ignoreRules) are
+//     dropped entirely.
+// Invalid custom patterns are silently skipped here; loadConfig already
+// surfaced a warning for them at load time.
+function buildEffectiveRules(
+  ignored: Set<string>,
+  config?: AIKSafetyConfig,
+): SafetyRule[] {
+  const overrides = config?.severityOverrides ?? {};
+  const byId = new Map<string, SafetyRule>();
+
+  for (const rule of SAFETY_RULES) {
+    const override = overrides[rule.id];
+    if (override === 'off') continue;
+    byId.set(rule.id, override ? { ...rule, severity: override } : rule);
+  }
+
+  for (const custom of config?.customRules ?? []) {
+    const pattern = compileCustomPattern(custom, []);
+    if (!pattern) continue;
+    byId.set(custom.id, {
+      id: custom.id,
+      pattern,
+      message: custom.message,
+      severity: custom.severity ?? 'warn',
+    });
+  }
+
+  return [...byId.values()].filter((rule) => !ignored.has(rule.id));
+}
+
+// Optional `changedLines` restricts findings to the given 1-based line numbers
+// (diff-aware mode). When omitted, every line in the file is scanned. This
+// keeps the signature backward compatible — existing callers pass only `path`
+// (and optionally `ignorePath`). `config` (from .aikconfig.json) is also
+// optional; when absent the built-in rules run unchanged.
+export function runSafetyCheck(
+  path: string,
+  ignorePath = '.aikignore',
+  changedLines?: Set<number>,
+  config?: AIKSafetyConfig,
+): SafetyResult {
   const findings: SafetyFinding[] = [];
 
   if (!fs.existsSync(path)) {
@@ -133,13 +184,18 @@ export function runSafetyCheck(path: string, ignorePath = '.aikignore'): SafetyR
   }
 
   const ignored = loadIgnoredRules(ignorePath);
+  for (const id of config?.ignoreRules ?? []) ignored.add(id);
+
+  const rules = buildEffectiveRules(ignored, config);
+
   const content = fs.readFileSync(path, 'utf-8');
   const lines = content.split('\n');
 
   for (let i = 0; i < lines.length; i++) {
+    // Diff-aware mode: skip lines that weren't changed in the current diff.
+    if (changedLines && !changedLines.has(i + 1)) continue;
     const line = lines[i];
-    for (const rule of SAFETY_RULES) {
-      if (ignored.has(rule.id)) continue;
+    for (const rule of rules) {
       if (rule.pattern.test(line)) {
         findings.push({
           ruleId: rule.id,

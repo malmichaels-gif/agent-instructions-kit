@@ -6,6 +6,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-28
+
+### Added
+
+#### High priority
+- `fix` command — auto-fixes the common issues the linter catches (like `eslint --fix`): adds missing required sections (`## Mission`, `## Local dev commands`) with starter stubs, redacts detected secrets (AWS keys, generic API keys/tokens, private keys, JWTs) to `[REDACTED]`, and adds the AGENTS.md reference to CLAUDE.md when missing. Ambiguous hedge words are flagged for manual review rather than auto-rewritten (a blind word swap mangles grammar). Supports `--dry-run` (preview) and `--json` (machine-readable report). It never rewrites boundary/constraint decisions or section bodies — those stay human judgement calls.
+- Token budget estimate in `score` — estimates token count (`chars / 4` heuristic) for AGENTS.md + CLAUDE.md + GEMINI.md combined, reports the percentage of a typical 100k-token context window consumed, and warns when instruction files exceed 5% of the window. Exposed in `--json` as a `tokenBudget` object (`estimatedTokens`, `percentOfWindow`, `isWarning`).
+- Score badge generation — new `--badge` flag on `score` prints a [shields.io](https://shields.io) markdown badge for the current grade (color-mapped A→brightgreen … F→red). `--badge-format svg` emits a self-contained, network-free SVG and `--badge-output <path>` writes the badge to a file. The badge is included in `--json` output as `badge`/`badgeFormat`.
+
+#### Medium priority
+- GEMINI.md generation and linting — `init` now generates GEMINI.md alongside AGENTS.md and CLAUDE.md (a thin file that defers to AGENTS.md). `check` and `score` validate GEMINI.md the same way as CLAUDE.md when present (optional — absent GEMINI.md never fails), and cross-file consistency now spans all three files.
+- AGENTS.md v1.1 frontmatter support — parses optional YAML frontmatter, validates `description` (non-empty string) and `tags` (non-empty list of strings) when present, and excludes frontmatter from line-length thresholds. In a monorepo (multiple AGENTS.md files), `check` warns when a file lacks frontmatter so files can be told apart. Frontmatter is purely additive — files without it pass unchanged.
+- `watch` command — `npx agent-instructions-kit watch` re-scores AGENTS.md (and CLAUDE.md) on every save during authoring, using Node's built-in `fs.watch` (no new dependency) with a configurable debounce (`--debounce`, default 300ms). Development-only; never exits non-zero and not meant for CI.
+
+#### Lower priority / exploratory
+- Diff-aware safety — `safety --diff` (alias `--changed-only`) reads the current `git diff` and reports safety findings only on changed lines, trimming noise on large pre-existing files. Falls back to scanning the whole file (with a warning) when git is unavailable or the directory is not a repo. The quality `score` always evaluates the full file. Wired into the Action via the `diff_mode` input (`off` default, `force`).
+- Claude Code hook suggestions — `check` reads backtick-wrapped, verifiable commands (npm, pnpm, yarn, cargo, go, pytest, poetry, uv, ruff, make, etc.) from the Verification section and prints a ready-to-paste `.claude/settings.json` `Stop` hook snippet so the agent re-verifies before finishing. Advisory only — never affects pass/fail. Available in `--json` under `agents.hookSuggestions`.
+- Rule customization via config — optional `.aikconfig.json` at the repo root tunes behavior: `check.lineWarnThreshold` / `check.lineErrorThreshold`, `safety.severityOverrides` (per-rule `warn`/`error`/`off`), `safety.ignoreRules` (merged with `.aikignore`), and `safety.customRules` (user-defined `{ id, pattern, message, severity? }`, compiled case-insensitively, ReDoS-guarded). Everything is optional and backward compatible; unknown keys and invalid values are reported as warnings, never fatal.
+
+### Changed
+- `init` now writes three files (AGENTS.md, CLAUDE.md, GEMINI.md) and refuses to overwrite an existing GEMINI.md.
+- `score` and `check` now factor GEMINI.md and cross-file consistency across all three files into the Consistency category.
+- GitHub Action gained the `diff_mode` and `gemini_path` inputs.
+
+### Tests
+- New colocated test suites for `fix`, `watch`, `diff`, `hooks`, `config`, and `frontmatter`, plus expanded CLI integration coverage.
+
 ## [0.3.0] - 2026-05-25
 
 ### Added

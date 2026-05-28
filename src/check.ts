@@ -1,6 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { CheckResult } from './types.js';
+import type { CheckResult, CheckAgentsOptions, CrossFileConsistencyResult, CrossFileIssue } from './types.js';
+import { hasFrontmatter, parseFrontmatter, stripFrontmatter, validateFrontmatter } from './frontmatter.js';
+import { suggestHooks } from './hooks.js';
 
 const REQUIRED_SECTIONS = [
   'Mission',
@@ -12,12 +14,12 @@ const RECOMMENDED_SECTIONS = [
   { pattern: /boundary|boundaries|what not to do|never|constraints/i, name: 'Boundaries / Constraints' },
 ];
 
-const LINE_WARN_THRESHOLD = 150;
-const LINE_ERROR_THRESHOLD = 300;
+const DEFAULT_LINE_WARN_THRESHOLD = 150;
+const DEFAULT_LINE_ERROR_THRESHOLD = 300;
 
 const BACKTICK_COMMAND = /`[^`]+`/;
 
-export function checkAgentsFile(filePath: string): CheckResult {
+export function checkAgentsFile(filePath: string, options: CheckAgentsOptions = {}): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -29,15 +31,35 @@ export function checkAgentsFile(filePath: string): CheckResult {
     };
   }
 
-  const content = fs.readFileSync(filePath, 'utf-8');
+  const rawContent = fs.readFileSync(filePath, 'utf-8');
 
-  if (content.trim().length === 0) {
+  if (rawContent.trim().length === 0) {
     return {
       passed: false,
       errors: [`File is empty: ${filePath}`],
       warnings: [],
     };
   }
+
+  // AGENTS.md v1.1 supports an optional YAML frontmatter block (description,
+  // tags). It is purely additive — files without it still pass. We strip it
+  // before running structural/content checks so the metadata is not mistaken
+  // for instructions and does not count against the line-length thresholds.
+  const fileHasFrontmatter = hasFrontmatter(rawContent);
+  if (fileHasFrontmatter) {
+    const fm = parseFrontmatter(rawContent);
+    if (!fm.success) {
+      warnings.push(`Frontmatter could not be parsed: ${fm.error ?? 'malformed YAML'}`);
+    } else if (fm.data) {
+      warnings.push(...validateFrontmatter(fm.data));
+    }
+  } else if ((options.agentsFileCount ?? 1) > 1) {
+    // Monorepos with multiple AGENTS.md files benefit from frontmatter
+    // (description/tags) so the files can be distinguished. Recommended, not required.
+    warnings.push('Multiple AGENTS.md files detected but this one has no frontmatter — add a "description" to distinguish it (optional, recommended for monorepos)');
+  }
+
+  const content = stripFrontmatter(rawContent);
 
   for (const section of REQUIRED_SECTIONS) {
     const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -51,12 +73,14 @@ export function checkAgentsFile(filePath: string): CheckResult {
     warnings.push('File contains TODO/FIXME placeholders');
   }
 
+  const lineWarnThreshold = options.lineWarnThreshold ?? DEFAULT_LINE_WARN_THRESHOLD;
+  const lineErrorThreshold = options.lineErrorThreshold ?? DEFAULT_LINE_ERROR_THRESHOLD;
   const lines = content.split('\n');
   const lineCount = lines.length;
-  if (lineCount > LINE_ERROR_THRESHOLD) {
-    warnings.push(`File is ${lineCount} lines (>${LINE_ERROR_THRESHOLD}). Agent performance degrades with long instruction files — trim aggressively`);
-  } else if (lineCount > LINE_WARN_THRESHOLD) {
-    warnings.push(`File is ${lineCount} lines (>${LINE_WARN_THRESHOLD}). Consider trimming — shorter files correlate with better agent performance`);
+  if (lineCount > lineErrorThreshold) {
+    warnings.push(`File is ${lineCount} lines (>${lineErrorThreshold}). Agent performance degrades with long instruction files — trim aggressively`);
+  } else if (lineCount > lineWarnThreshold) {
+    warnings.push(`File is ${lineCount} lines (>${lineWarnThreshold}). Consider trimming — shorter files correlate with better agent performance`);
   }
 
   for (const rec of RECOMMENDED_SECTIONS) {
@@ -83,14 +107,30 @@ export function checkAgentsFile(filePath: string): CheckResult {
     warnings.push(`Referenced command \`${cmd}\` does not appear to exist in this project`);
   }
 
+  // Suggest Claude Code hooks based on verifiable commands documented in the
+  // Verification section. Purely advisory — never affects pass/fail.
+  const hookSuggestions = suggestHooks(content);
+
   return {
     passed: errors.length === 0,
     errors,
     warnings,
+    hookSuggestions,
   };
 }
 
 export function checkClaudeFile(filePath: string, agentsPath: string): CheckResult {
+  return checkDeferringFile(filePath, agentsPath, 'CLAUDE.md');
+}
+
+export function checkGeminiFile(filePath: string, agentsPath: string): CheckResult {
+  return checkDeferringFile(filePath, agentsPath, 'GEMINI.md');
+}
+
+// Shared validation for thin instruction files (CLAUDE.md, GEMINI.md) that are
+// expected to defer to AGENTS.md. They should reference AGENTS.md and must not
+// contradict it.
+function checkDeferringFile(filePath: string, agentsPath: string, label: string): CheckResult {
   const errors: string[] = [];
   const warnings: string[] = [];
 
@@ -113,20 +153,20 @@ export function checkClaudeFile(filePath: string, agentsPath: string): CheckResu
   }
 
   if (!content.includes('AGENTS.md')) {
-    warnings.push('CLAUDE.md should reference AGENTS.md as source of truth');
+    warnings.push(`${label} should reference AGENTS.md as source of truth`);
   }
 
   if (fs.existsSync(agentsPath)) {
     const agentsContent = fs.readFileSync(agentsPath, 'utf-8');
     const agentsSections = extractHeadings(agentsContent);
-    const claudeSections = extractHeadings(content);
+    const fileSections = extractHeadings(content);
 
-    for (const heading of claudeSections) {
+    for (const heading of fileSections) {
       const match = agentsSections.find((h) => h.toLowerCase() === heading.toLowerCase());
       if (match) {
         const agentsBody = getSectionBody(agentsContent, match);
-        const claudeBody = getSectionBody(content, heading);
-        if (agentsBody && claudeBody && hasContradiction(agentsBody, claudeBody)) {
+        const fileBody = getSectionBody(content, heading);
+        if (agentsBody && fileBody && hasContradiction(agentsBody, fileBody)) {
           warnings.push(`Section "${heading}" may contradict AGENTS.md — review for consistency`);
         }
       }
@@ -138,6 +178,79 @@ export function checkClaudeFile(filePath: string, agentsPath: string): CheckResu
     errors,
     warnings,
   };
+}
+
+// Cross-file consistency: detect contradictions and duplicated sections across
+// AGENTS.md, CLAUDE.md, and GEMINI.md. Only files that exist are compared.
+// Issues are warnings (not errors) because the heuristics are deliberately
+// conservative to keep false positives low.
+export function checkCrossFileConsistency(
+  agentsPath: string,
+  claudePath: string,
+  geminiPath: string,
+): CrossFileConsistencyResult {
+  const issues: CrossFileIssue[] = [];
+
+  const files: { name: string; path: string; content: string }[] = [];
+  for (const [name, p] of [
+    ['AGENTS.md', agentsPath],
+    ['CLAUDE.md', claudePath],
+    ['GEMINI.md', geminiPath],
+  ] as const) {
+    if (fs.existsSync(p)) {
+      const content = fs.readFileSync(p, 'utf-8');
+      if (content.trim().length > 0) {
+        files.push({ name, path: p, content });
+      }
+    }
+  }
+
+  // Pairwise comparison across every existing file.
+  for (let i = 0; i < files.length; i++) {
+    for (let j = i + 1; j < files.length; j++) {
+      const a = files[i];
+      const b = files[j];
+      const aSections = extractHeadings(a.content);
+      const bSections = extractHeadings(b.content);
+
+      for (const heading of aSections) {
+        const match = bSections.find((h) => h.toLowerCase() === heading.toLowerCase());
+        if (!match) continue;
+        const aBody = getSectionBody(a.content, heading);
+        const bBody = getSectionBody(b.content, match);
+        if (!aBody || !bBody) continue;
+
+        if (hasContradiction(aBody, bBody)) {
+          issues.push({
+            type: 'contradiction',
+            files: [a.name, b.name],
+            message: `Section "${heading}" may contradict between ${a.name} and ${b.name} — review for consistency`,
+            severity: 'warn',
+          });
+        } else if (normalizeBody(aBody) === normalizeBody(bBody)) {
+          issues.push({
+            type: 'duplication',
+            files: [a.name, b.name],
+            message: `Section "${heading}" is duplicated verbatim in ${a.name} and ${b.name} — keep the content in AGENTS.md only`,
+            severity: 'warn',
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    passed: issues.length === 0,
+    issues,
+  };
+}
+
+function normalizeBody(body: string): string {
+  return body
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+    .join('\n');
 }
 
 interface Section {

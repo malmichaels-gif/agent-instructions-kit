@@ -19,6 +19,10 @@ inputs:
     description: 'Fail CI if safety rules are triggered'
     required: false
     default: 'false'
+  diff_mode:
+    description: 'Diff-aware safety: off (scan whole file, default) or force (only report safety findings on lines changed in the current git diff). Reduces noise on large existing files. The quality score always uses the full file.'
+    required: false
+    default: 'off'
   agents_path:
     description: 'Path to AGENTS.md file'
     required: false
@@ -27,6 +31,10 @@ inputs:
     description: 'Path to CLAUDE.md file'
     required: false
     default: 'CLAUDE.md'
+  gemini_path:
+    description: 'Path to GEMINI.md file (optional)'
+    required: false
+    default: 'GEMINI.md'
 
 outputs:
   check_passed:

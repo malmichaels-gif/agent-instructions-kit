@@ -25684,8 +25684,12 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.checkAgentsFile = checkAgentsFile;
 exports.checkClaudeFile = checkClaudeFile;
+exports.checkGeminiFile = checkGeminiFile;
+exports.checkCrossFileConsistency = checkCrossFileConsistency;
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
+const frontmatter_js_1 = __nccwpck_require__(1593);
+const hooks_js_1 = __nccwpck_require__(5987);
 const REQUIRED_SECTIONS = [
     'Mission',
     'Local dev commands',
@@ -25694,10 +25698,10 @@ const RECOMMENDED_SECTIONS = [
     { pattern: /testing|verification|verify|test plan/i, name: 'Testing / Verification' },
     { pattern: /boundary|boundaries|what not to do|never|constraints/i, name: 'Boundaries / Constraints' },
 ];
-const LINE_WARN_THRESHOLD = 150;
-const LINE_ERROR_THRESHOLD = 300;
+const DEFAULT_LINE_WARN_THRESHOLD = 150;
+const DEFAULT_LINE_ERROR_THRESHOLD = 300;
 const BACKTICK_COMMAND = /`[^`]+`/;
-function checkAgentsFile(filePath) {
+function checkAgentsFile(filePath, options = {}) {
     const errors = [];
     const warnings = [];
     if (!fs.existsSync(filePath)) {
@@ -25707,14 +25711,34 @@ function checkAgentsFile(filePath) {
             warnings: [],
         };
     }
-    const content = fs.readFileSync(filePath, 'utf-8');
-    if (content.trim().length === 0) {
+    const rawContent = fs.readFileSync(filePath, 'utf-8');
+    if (rawContent.trim().length === 0) {
         return {
             passed: false,
             errors: [`File is empty: ${filePath}`],
             warnings: [],
         };
     }
+    // AGENTS.md v1.1 supports an optional YAML frontmatter block (description,
+    // tags). It is purely additive — files without it still pass. We strip it
+    // before running structural/content checks so the metadata is not mistaken
+    // for instructions and does not count against the line-length thresholds.
+    const fileHasFrontmatter = (0, frontmatter_js_1.hasFrontmatter)(rawContent);
+    if (fileHasFrontmatter) {
+        const fm = (0, frontmatter_js_1.parseFrontmatter)(rawContent);
+        if (!fm.success) {
+            warnings.push(`Frontmatter could not be parsed: ${fm.error ?? 'malformed YAML'}`);
+        }
+        else if (fm.data) {
+            warnings.push(...(0, frontmatter_js_1.validateFrontmatter)(fm.data));
+        }
+    }
+    else if ((options.agentsFileCount ?? 1) > 1) {
+        // Monorepos with multiple AGENTS.md files benefit from frontmatter
+        // (description/tags) so the files can be distinguished. Recommended, not required.
+        warnings.push('Multiple AGENTS.md files detected but this one has no frontmatter — add a "description" to distinguish it (optional, recommended for monorepos)');
+    }
+    const content = (0, frontmatter_js_1.stripFrontmatter)(rawContent);
     for (const section of REQUIRED_SECTIONS) {
         const escaped = section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const pattern = new RegExp(`^##\\s+${escaped}`, 'mi');
@@ -25725,13 +25749,15 @@ function checkAgentsFile(filePath) {
     if (content.includes('TODO') || content.includes('FIXME')) {
         warnings.push('File contains TODO/FIXME placeholders');
     }
+    const lineWarnThreshold = options.lineWarnThreshold ?? DEFAULT_LINE_WARN_THRESHOLD;
+    const lineErrorThreshold = options.lineErrorThreshold ?? DEFAULT_LINE_ERROR_THRESHOLD;
     const lines = content.split('\n');
     const lineCount = lines.length;
-    if (lineCount > LINE_ERROR_THRESHOLD) {
-        warnings.push(`File is ${lineCount} lines (>${LINE_ERROR_THRESHOLD}). Agent performance degrades with long instruction files — trim aggressively`);
+    if (lineCount > lineErrorThreshold) {
+        warnings.push(`File is ${lineCount} lines (>${lineErrorThreshold}). Agent performance degrades with long instruction files — trim aggressively`);
     }
-    else if (lineCount > LINE_WARN_THRESHOLD) {
-        warnings.push(`File is ${lineCount} lines (>${LINE_WARN_THRESHOLD}). Consider trimming — shorter files correlate with better agent performance`);
+    else if (lineCount > lineWarnThreshold) {
+        warnings.push(`File is ${lineCount} lines (>${lineWarnThreshold}). Consider trimming — shorter files correlate with better agent performance`);
     }
     for (const rec of RECOMMENDED_SECTIONS) {
         if (!rec.pattern.test(content)) {
@@ -25753,13 +25779,26 @@ function checkAgentsFile(filePath) {
     for (const cmd of brokenCmds) {
         warnings.push(`Referenced command \`${cmd}\` does not appear to exist in this project`);
     }
+    // Suggest Claude Code hooks based on verifiable commands documented in the
+    // Verification section. Purely advisory — never affects pass/fail.
+    const hookSuggestions = (0, hooks_js_1.suggestHooks)(content);
     return {
         passed: errors.length === 0,
         errors,
         warnings,
+        hookSuggestions,
     };
 }
 function checkClaudeFile(filePath, agentsPath) {
+    return checkDeferringFile(filePath, agentsPath, 'CLAUDE.md');
+}
+function checkGeminiFile(filePath, agentsPath) {
+    return checkDeferringFile(filePath, agentsPath, 'GEMINI.md');
+}
+// Shared validation for thin instruction files (CLAUDE.md, GEMINI.md) that are
+// expected to defer to AGENTS.md. They should reference AGENTS.md and must not
+// contradict it.
+function checkDeferringFile(filePath, agentsPath, label) {
     const errors = [];
     const warnings = [];
     if (!fs.existsSync(filePath)) {
@@ -25778,18 +25817,18 @@ function checkClaudeFile(filePath, agentsPath) {
         };
     }
     if (!content.includes('AGENTS.md')) {
-        warnings.push('CLAUDE.md should reference AGENTS.md as source of truth');
+        warnings.push(`${label} should reference AGENTS.md as source of truth`);
     }
     if (fs.existsSync(agentsPath)) {
         const agentsContent = fs.readFileSync(agentsPath, 'utf-8');
         const agentsSections = extractHeadings(agentsContent);
-        const claudeSections = extractHeadings(content);
-        for (const heading of claudeSections) {
+        const fileSections = extractHeadings(content);
+        for (const heading of fileSections) {
             const match = agentsSections.find((h) => h.toLowerCase() === heading.toLowerCase());
             if (match) {
                 const agentsBody = getSectionBody(agentsContent, match);
-                const claudeBody = getSectionBody(content, heading);
-                if (agentsBody && claudeBody && hasContradiction(agentsBody, claudeBody)) {
+                const fileBody = getSectionBody(content, heading);
+                if (agentsBody && fileBody && hasContradiction(agentsBody, fileBody)) {
                     warnings.push(`Section "${heading}" may contradict AGENTS.md — review for consistency`);
                 }
             }
@@ -25800,6 +25839,71 @@ function checkClaudeFile(filePath, agentsPath) {
         errors,
         warnings,
     };
+}
+// Cross-file consistency: detect contradictions and duplicated sections across
+// AGENTS.md, CLAUDE.md, and GEMINI.md. Only files that exist are compared.
+// Issues are warnings (not errors) because the heuristics are deliberately
+// conservative to keep false positives low.
+function checkCrossFileConsistency(agentsPath, claudePath, geminiPath) {
+    const issues = [];
+    const files = [];
+    for (const [name, p] of [
+        ['AGENTS.md', agentsPath],
+        ['CLAUDE.md', claudePath],
+        ['GEMINI.md', geminiPath],
+    ]) {
+        if (fs.existsSync(p)) {
+            const content = fs.readFileSync(p, 'utf-8');
+            if (content.trim().length > 0) {
+                files.push({ name, path: p, content });
+            }
+        }
+    }
+    // Pairwise comparison across every existing file.
+    for (let i = 0; i < files.length; i++) {
+        for (let j = i + 1; j < files.length; j++) {
+            const a = files[i];
+            const b = files[j];
+            const aSections = extractHeadings(a.content);
+            const bSections = extractHeadings(b.content);
+            for (const heading of aSections) {
+                const match = bSections.find((h) => h.toLowerCase() === heading.toLowerCase());
+                if (!match)
+                    continue;
+                const aBody = getSectionBody(a.content, heading);
+                const bBody = getSectionBody(b.content, match);
+                if (!aBody || !bBody)
+                    continue;
+                if (hasContradiction(aBody, bBody)) {
+                    issues.push({
+                        type: 'contradiction',
+                        files: [a.name, b.name],
+                        message: `Section "${heading}" may contradict between ${a.name} and ${b.name} — review for consistency`,
+                        severity: 'warn',
+                    });
+                }
+                else if (normalizeBody(aBody) === normalizeBody(bBody)) {
+                    issues.push({
+                        type: 'duplication',
+                        files: [a.name, b.name],
+                        message: `Section "${heading}" is duplicated verbatim in ${a.name} and ${b.name} — keep the content in AGENTS.md only`,
+                        severity: 'warn',
+                    });
+                }
+            }
+        }
+    }
+    return {
+        passed: issues.length === 0,
+        issues,
+    };
+}
+function normalizeBody(body) {
+    return body
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+        .join('\n');
 }
 function splitSections(content) {
     const sections = [];
@@ -25898,6 +26002,821 @@ function validateCommands(content, dir) {
 
 /***/ }),
 
+/***/ 2973:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.compileCustomPattern = compileCustomPattern;
+exports.loadConfig = loadConfig;
+const fs = __importStar(__nccwpck_require__(9896));
+const DEFAULT_CONFIG_PATH = '.aikconfig.json';
+// Keys we recognize at each level. Anything else is reported as an unknown key
+// (likely a typo) so users get fast feedback without a hard failure.
+const ROOT_KEYS = new Set(['check', 'safety']);
+const CHECK_KEYS = new Set(['lineWarnThreshold', 'lineErrorThreshold']);
+const SAFETY_KEYS = new Set(['severityOverrides', 'customRules', 'ignoreRules']);
+const CUSTOM_RULE_KEYS = new Set(['id', 'pattern', 'message', 'severity']);
+const VALID_OVERRIDES = new Set(['warn', 'error', 'off']);
+function isPlainObject(value) {
+    return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+// Compile a user-supplied pattern to a case-insensitive RegExp, mirroring the
+// built-in safety rules (most of which use the `i` flag). Returns null and a
+// warning when the pattern does not compile. We also guard against catastrophic
+// compile times (a coarse ReDoS smoke test): if compilation takes >100ms the
+// rule is rejected. Compilation alone is cheap; this mainly trips on
+// pathologically large patterns.
+function compileCustomPattern(rule, warnings) {
+    if (typeof rule.pattern !== 'string' || rule.pattern.length === 0) {
+        warnings.push(`Custom rule "${rule.id ?? '(no id)'}" has no valid "pattern" string — skipped`);
+        return null;
+    }
+    const start = Date.now();
+    try {
+        const re = new RegExp(rule.pattern, 'i');
+        const elapsed = Date.now() - start;
+        if (elapsed > 100) {
+            warnings.push(`Custom rule "${rule.id}" pattern took ${elapsed}ms to compile — possible ReDoS, skipped`);
+            return null;
+        }
+        return re;
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        warnings.push(`Custom rule "${rule.id ?? '(no id)'}" has an invalid regex pattern (${msg}) — skipped`);
+        return null;
+    }
+}
+function validateCheck(raw, warnings) {
+    const check = {};
+    for (const key of Object.keys(raw)) {
+        if (!CHECK_KEYS.has(key)) {
+            warnings.push(`Unknown config key "check.${key}" — ignored`);
+        }
+    }
+    const warn = raw.lineWarnThreshold;
+    if (warn !== undefined) {
+        if (typeof warn === 'number' && Number.isFinite(warn) && warn > 0) {
+            check.lineWarnThreshold = warn;
+        }
+        else {
+            warnings.push('"check.lineWarnThreshold" must be a positive number — ignored');
+        }
+    }
+    const error = raw.lineErrorThreshold;
+    if (error !== undefined) {
+        if (typeof error === 'number' && Number.isFinite(error) && error > 0) {
+            check.lineErrorThreshold = error;
+        }
+        else {
+            warnings.push('"check.lineErrorThreshold" must be a positive number — ignored');
+        }
+    }
+    if (check.lineWarnThreshold !== undefined &&
+        check.lineErrorThreshold !== undefined &&
+        check.lineWarnThreshold > check.lineErrorThreshold) {
+        warnings.push('"check.lineWarnThreshold" is greater than "check.lineErrorThreshold" — the warn threshold will never trigger');
+    }
+    return check;
+}
+function validateSafety(raw, warnings) {
+    const safety = {};
+    for (const key of Object.keys(raw)) {
+        if (!SAFETY_KEYS.has(key)) {
+            warnings.push(`Unknown config key "safety.${key}" — ignored`);
+        }
+    }
+    if (raw.severityOverrides !== undefined) {
+        if (isPlainObject(raw.severityOverrides)) {
+            const overrides = {};
+            for (const [ruleId, value] of Object.entries(raw.severityOverrides)) {
+                if (typeof value === 'string' && VALID_OVERRIDES.has(value)) {
+                    overrides[ruleId] = value;
+                }
+                else {
+                    warnings.push(`"safety.severityOverrides.${ruleId}" must be one of warn|error|off — ignored`);
+                }
+            }
+            if (Object.keys(overrides).length > 0)
+                safety.severityOverrides = overrides;
+        }
+        else {
+            warnings.push('"safety.severityOverrides" must be an object — ignored');
+        }
+    }
+    if (raw.ignoreRules !== undefined) {
+        if (Array.isArray(raw.ignoreRules) && raw.ignoreRules.every((r) => typeof r === 'string')) {
+            safety.ignoreRules = raw.ignoreRules;
+        }
+        else {
+            warnings.push('"safety.ignoreRules" must be an array of strings — ignored');
+        }
+    }
+    if (raw.customRules !== undefined) {
+        if (Array.isArray(raw.customRules)) {
+            const rules = [];
+            const seen = new Set();
+            for (const entry of raw.customRules) {
+                if (!isPlainObject(entry)) {
+                    warnings.push('"safety.customRules" entries must be objects — skipped one entry');
+                    continue;
+                }
+                for (const key of Object.keys(entry)) {
+                    if (!CUSTOM_RULE_KEYS.has(key)) {
+                        warnings.push(`Unknown config key "safety.customRules[].${key}" — ignored`);
+                    }
+                }
+                const id = entry.id;
+                const pattern = entry.pattern;
+                const message = entry.message;
+                if (typeof id !== 'string' || id.length === 0) {
+                    warnings.push('A custom rule is missing a string "id" — skipped');
+                    continue;
+                }
+                if (typeof pattern !== 'string' || pattern.length === 0) {
+                    warnings.push(`Custom rule "${id}" is missing a string "pattern" — skipped`);
+                    continue;
+                }
+                if (typeof message !== 'string' || message.length === 0) {
+                    warnings.push(`Custom rule "${id}" is missing a string "message" — skipped`);
+                    continue;
+                }
+                if (seen.has(id)) {
+                    warnings.push(`Duplicate custom rule id "${id}" — only the first is used`);
+                    continue;
+                }
+                let severity = 'warn';
+                if (entry.severity !== undefined) {
+                    if (entry.severity === 'warn' || entry.severity === 'error') {
+                        severity = entry.severity;
+                    }
+                    else {
+                        warnings.push(`Custom rule "${id}" has invalid severity — defaulting to "warn"`);
+                    }
+                }
+                seen.add(id);
+                rules.push({ id, pattern, message, severity });
+            }
+            if (rules.length > 0)
+                safety.customRules = rules;
+        }
+        else {
+            warnings.push('"safety.customRules" must be an array — ignored');
+        }
+    }
+    return safety;
+}
+// Load and validate .aikconfig.json. Always returns a usable AIKConfig:
+// - File absent          -> {} (every consumer falls back to defaults)
+// - Invalid JSON         -> {} plus a warning (never throws)
+// - Unknown/invalid keys -> dropped, each reported as a warning
+function loadConfig(configPath = DEFAULT_CONFIG_PATH) {
+    const warnings = [];
+    if (!fs.existsSync(configPath)) {
+        return { config: {}, warnings };
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        warnings.push(`${configPath} is not valid JSON (${msg}) — ignoring config and using defaults`);
+        return { config: {}, warnings };
+    }
+    if (!isPlainObject(parsed)) {
+        warnings.push(`${configPath} must contain a JSON object — ignoring config and using defaults`);
+        return { config: {}, warnings };
+    }
+    for (const key of Object.keys(parsed)) {
+        if (!ROOT_KEYS.has(key)) {
+            warnings.push(`Unknown config key "${key}" — ignored`);
+        }
+    }
+    const config = {};
+    if (parsed.check !== undefined) {
+        if (isPlainObject(parsed.check)) {
+            config.check = validateCheck(parsed.check, warnings);
+        }
+        else {
+            warnings.push('"check" must be an object — ignored');
+        }
+    }
+    if (parsed.safety !== undefined) {
+        if (isPlainObject(parsed.safety)) {
+            config.safety = validateSafety(parsed.safety, warnings);
+        }
+        else {
+            warnings.push('"safety" must be an object — ignored');
+        }
+    }
+    return { config, warnings };
+}
+
+
+/***/ }),
+
+/***/ 9952:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parseDiff = parseDiff;
+exports.changedLinesForFile = changedLinesForFile;
+exports.getGitDiff = getGitDiff;
+const child_process_1 = __nccwpck_require__(5317);
+// Parses unified `git diff` output and extracts the set of *added/changed*
+// lines per file, expressed as inclusive [startLine, endLine] ranges keyed by
+// the post-image (new) file path. Only added lines (`+`) advance the new-file
+// line counter and are recorded as changed; removed lines (`-`) and context
+// lines are tracked for positioning but removals are not reported (they no
+// longer exist in the file we are scanning).
+//
+// Diff-aware safety filters findings to lines that appear here, so we
+// deliberately track the *new* file's line numbers — those match the line
+// numbers `runSafetyCheck` reports when scanning the working-tree file.
+//
+// This is a simple line-oriented parser of standard unified diff output
+// (lines starting with `diff --git`, `+++`, `@@`, `+`, `-`). It intentionally
+// does not attempt to fully model renames, merges, or binary files — those are
+// parsed loosely and contribute no changed lines, which is the safe default
+// (fewer findings suppressed incorrectly is preferable to crashing).
+function parseDiff(diffText) {
+    const ranges = [];
+    const lines = diffText.split('\n');
+    let currentFile = null;
+    // Line number in the new (post-image) file for the next non-removed line.
+    let newLineNo = 0;
+    // Accumulator for a contiguous run of changed lines so we emit compact ranges
+    // instead of one range per line.
+    let runStart = 0;
+    let runEnd = 0;
+    const flushRun = () => {
+        if (currentFile !== null && runStart > 0) {
+            ranges.push({ file: currentFile, startLine: runStart, endLine: runEnd });
+        }
+        runStart = 0;
+        runEnd = 0;
+    };
+    for (const raw of lines) {
+        // New file section. `+++ b/path` carries the post-image path; prefer it,
+        // but fall back to the `diff --git a/x b/y` header.
+        if (raw.startsWith('+++ ')) {
+            flushRun();
+            const p = raw.slice(4).trim();
+            if (p === '/dev/null') {
+                // File was deleted — nothing in the new tree to scan.
+                currentFile = null;
+            }
+            else {
+                currentFile = stripDiffPathPrefix(p);
+            }
+            continue;
+        }
+        if (raw.startsWith('--- ')) {
+            // Pre-image header; ignored for new-file line tracking.
+            continue;
+        }
+        if (raw.startsWith('diff --git')) {
+            flushRun();
+            // Defer the authoritative path to the following `+++` line, but record a
+            // best-effort path so single-file diffs without `+++` still attribute.
+            const m = /^diff --git a\/(.+) b\/(.+)$/.exec(raw);
+            currentFile = m ? m[2] : null;
+            continue;
+        }
+        // Hunk header: @@ -oldStart,oldCount +newStart,newCount @@
+        if (raw.startsWith('@@')) {
+            flushRun();
+            const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(raw);
+            if (m) {
+                newLineNo = Number.parseInt(m[1], 10);
+            }
+            continue;
+        }
+        if (currentFile === null)
+            continue;
+        if (raw.startsWith('+')) {
+            // Added/changed line in the new file.
+            if (runStart === 0) {
+                runStart = newLineNo;
+            }
+            runEnd = newLineNo;
+            newLineNo++;
+        }
+        else if (raw.startsWith('-')) {
+            // Removed line — exists only in the old file; does not advance newLineNo
+            // and breaks any contiguous added run.
+            flushRun();
+        }
+        else if (raw.startsWith('\\')) {
+            // "\ No newline at end of file" — metadata, not a content line.
+            continue;
+        }
+        else {
+            // Context line (leading space) or blank line within a hunk: advances the
+            // new-file counter and ends the current changed run.
+            flushRun();
+            newLineNo++;
+        }
+    }
+    flushRun();
+    return { ranges };
+}
+// Strips the leading `a/` or `b/` prefix git adds to diff paths.
+function stripDiffPathPrefix(p) {
+    if (p.startsWith('a/') || p.startsWith('b/'))
+        return p.slice(2);
+    return p;
+}
+// Collapses parsed ranges for a single file into a flat set of changed line
+// numbers, for O(1) membership checks during finding filtering.
+function changedLinesForFile(ranges, filePath) {
+    const normalized = normalizePath(filePath);
+    const result = new Set();
+    for (const r of ranges) {
+        if (normalizePath(r.file) === normalized) {
+            for (let n = r.startLine; n <= r.endLine; n++) {
+                result.add(n);
+            }
+        }
+    }
+    return result;
+}
+function normalizePath(p) {
+    return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+// Runs `git diff` (and `git diff --cached`) in `cwd` and returns the combined
+// unified diff text. Returns an error string (not a throw) when git is missing
+// or the directory is not a git repository, so callers can degrade gracefully.
+// `runner` is injectable for tests.
+function getGitDiff(cwd = '.', runner = defaultGitRunner) {
+    try {
+        const againstHead = runner(['diff', '--no-color', '--unified=0', 'HEAD'], cwd);
+        return parseDiff(againstHead);
+    }
+    catch (err) {
+        // `HEAD` may not exist (no commits yet) — fall back to the working-tree
+        // diff plus the staged diff, and surface a clear error only if both fail.
+        try {
+            const unstaged = runner(['diff', '--no-color', '--unified=0'], cwd);
+            const staged = runner(['diff', '--no-color', '--unified=0', '--cached'], cwd);
+            const combined = staged ? `${unstaged}\n${staged}` : unstaged;
+            return parseDiff(combined);
+        }
+        catch (err2) {
+            return { ranges: [], error: gitErrorMessage(err2 ?? err) };
+        }
+    }
+}
+function defaultGitRunner(args, cwd) {
+    return (0, child_process_1.execFileSync)('git', args, {
+        cwd,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+    });
+}
+function gitErrorMessage(err) {
+    const e = err;
+    if (e && e.code === 'ENOENT') {
+        return 'git executable not found — diff mode requires git on PATH';
+    }
+    return 'could not read git diff — not a git repository or git failed';
+}
+
+
+/***/ }),
+
+/***/ 9164:
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
+
+"use strict";
+
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.discoverFiles = discoverFiles;
+exports.discoverAgentsFiles = discoverAgentsFiles;
+const fs = __importStar(__nccwpck_require__(9896));
+const path = __importStar(__nccwpck_require__(6928));
+const KNOWN_FILES = [
+    '.github/copilot-instructions.md',
+    '.cursor/rules',
+    '.cursorrules',
+    '.windsurfrules',
+    '.aider/conventions.md',
+    'CONVENTIONS.md',
+];
+function discoverFiles(dir = '.') {
+    const found = [];
+    for (const file of KNOWN_FILES) {
+        const full = path.join(dir, file);
+        if (fs.existsSync(full)) {
+            found.push(full);
+        }
+    }
+    return found;
+}
+const IGNORED_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', '.next', 'out', 'target', 'vendor']);
+// Recursively find all AGENTS.md files under a directory (monorepo-aware).
+// Used to decide whether a project is a monorepo so the frontmatter
+// recommendation can be surfaced. Bounded depth keeps this cheap on large trees.
+function discoverAgentsFiles(dir = '.', maxDepth = 6) {
+    const found = [];
+    const walk = (current, depth) => {
+        if (depth > maxDepth)
+            return;
+        let entries;
+        try {
+            entries = fs.readdirSync(current, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (entry.isDirectory()) {
+                if (IGNORED_DIRS.has(entry.name) || entry.name.startsWith('.'))
+                    continue;
+                walk(path.join(current, entry.name), depth + 1);
+            }
+            else if (entry.isFile() && entry.name === 'AGENTS.md') {
+                found.push(path.join(current, entry.name));
+            }
+        }
+    };
+    walk(dir, 0);
+    return found;
+}
+
+
+/***/ }),
+
+/***/ 1593:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.hasFrontmatter = hasFrontmatter;
+exports.stripFrontmatter = stripFrontmatter;
+exports.parseFrontmatter = parseFrontmatter;
+exports.validateFrontmatter = validateFrontmatter;
+const DELIMITER = /^---\s*$/;
+function stripBom(line) {
+    return line.charCodeAt(0) === 0xfeff ? line.slice(1) : line;
+}
+// Detect whether content opens with a YAML frontmatter block (--- ... ---).
+function hasFrontmatter(content) {
+    const lines = content.split('\n');
+    // The very first line (ignoring a possible BOM) must be the opening delimiter.
+    const first = stripBom(lines[0] ?? '');
+    if (!DELIMITER.test(first))
+        return false;
+    for (let i = 1; i < lines.length; i++) {
+        if (DELIMITER.test(lines[i]))
+            return true;
+    }
+    return false;
+}
+// Return the markdown content with any leading frontmatter block removed.
+// If no frontmatter is present the content is returned unchanged.
+function stripFrontmatter(content) {
+    if (!hasFrontmatter(content))
+        return content;
+    const lines = content.split('\n');
+    for (let i = 1; i < lines.length; i++) {
+        if (DELIMITER.test(lines[i])) {
+            return lines.slice(i + 1).join('\n').replace(/^\n+/, '');
+        }
+    }
+    return content;
+}
+// Parse the optional YAML frontmatter at the top of an AGENTS.md file.
+// Returns null (via success=false with no error) semantics handled by caller
+// when no frontmatter block exists. This is a deliberately tiny YAML reader
+// that only understands the v1.1 shape: a `description` scalar and a `tags`
+// list (either inline `[a, b]` or block `- a` form). Nested structures are
+// intentionally unsupported.
+function parseFrontmatter(content) {
+    if (!hasFrontmatter(content)) {
+        return { success: false };
+    }
+    const lines = content.split('\n');
+    const body = [];
+    let closed = false;
+    for (let i = 1; i < lines.length; i++) {
+        if (DELIMITER.test(lines[i])) {
+            closed = true;
+            break;
+        }
+        body.push(lines[i]);
+    }
+    if (!closed) {
+        return { success: false, error: 'Frontmatter block is not closed with "---"' };
+    }
+    const data = { raw: body.join('\n') };
+    for (let i = 0; i < body.length; i++) {
+        const line = body[i];
+        if (line.trim().length === 0)
+            continue;
+        // Indented lines belong to a block list (handled by the tags branch below)
+        // or are otherwise ignored here.
+        const kv = line.match(/^([A-Za-z][\w-]*)\s*:\s*(.*)$/);
+        if (!kv)
+            continue;
+        const key = kv[1].toLowerCase();
+        const rawValue = kv[2];
+        if (key === 'description') {
+            data.description = unquote(rawValue.trim());
+        }
+        else if (key === 'tags') {
+            const inline = rawValue.trim();
+            if (inline.length > 0) {
+                data.tags = parseInlineList(inline);
+            }
+            else {
+                // Block list form: subsequent indented "- value" lines.
+                const collected = [];
+                let j = i + 1;
+                for (; j < body.length; j++) {
+                    const itemMatch = body[j].match(/^\s*-\s+(.*)$/);
+                    if (!itemMatch) {
+                        if (body[j].trim().length === 0)
+                            continue;
+                        break;
+                    }
+                    collected.push(unquote(itemMatch[1].trim()));
+                }
+                data.tags = collected;
+                i = j - 1;
+            }
+        }
+    }
+    return { success: true, data };
+}
+function parseInlineList(value) {
+    let inner = value;
+    if (inner.startsWith('[') && inner.endsWith(']')) {
+        inner = inner.slice(1, -1);
+    }
+    return inner
+        .split(',')
+        .map((s) => unquote(s.trim()))
+        .filter((s) => s.length > 0);
+}
+function unquote(value) {
+    if (value.length >= 2) {
+        const first = value[0];
+        const last = value[value.length - 1];
+        if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+            return value.slice(1, -1);
+        }
+    }
+    return value;
+}
+// Validate the v1.1 frontmatter fields. All fields are optional; this only
+// flags fields that are present but malformed. Returns human-readable warning
+// strings (empty array means valid / nothing present).
+function validateFrontmatter(data) {
+    const warnings = [];
+    if (data.description !== undefined) {
+        if (typeof data.description !== 'string' || data.description.trim().length === 0) {
+            warnings.push('Frontmatter "description" is present but empty — provide a short description or remove it');
+        }
+    }
+    if (data.tags !== undefined) {
+        if (!Array.isArray(data.tags) || data.tags.length === 0) {
+            warnings.push('Frontmatter "tags" is present but empty — provide at least one tag or remove it');
+        }
+        else {
+            const allStrings = data.tags.every((t) => typeof t === 'string' && t.trim().length > 0);
+            if (!allStrings) {
+                warnings.push('Frontmatter "tags" must be a list of non-empty strings');
+            }
+        }
+    }
+    return warnings;
+}
+
+
+/***/ }),
+
+/***/ 5987:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.suggestHooks = suggestHooks;
+exports.renderHookSettings = renderHookSettings;
+// Heuristic parsing of the AGENTS.md "Verification" section into Claude Code
+// hook suggestions. The idea: if a project documents that "`npm test` exits 0"
+// is part of its definition of done, that command is a natural fit for a Stop
+// hook in .claude/settings.json so the agent re-runs it before finishing.
+//
+// We deliberately keep this conservative to avoid false positives:
+//   - Only the Verification section (or a Testing/Verify heading) is scanned.
+//   - Only backtick-wrapped commands are considered (prose is ignored).
+//   - Only commands whose leading token matches a known build/test tool are
+//     suggested (npm/pnpm/yarn/cargo/go/pytest/poetry/uv/ruff/make).
+// All suggestions map to the Stop hook, which fires when the agent finishes a
+// response — the right moment to assert "is the work actually verified?".
+// Headings whose body we treat as the verification section. Matched against
+// `## <heading>` lines, case-insensitively.
+const VERIFICATION_HEADING = /testing|verification|verify|test plan|definition of done/i;
+// Leading command tokens we recognize as verifiable build/test commands. Mirrors
+// the tools understood by detect.ts so the two stay roughly aligned.
+const KNOWN_COMMAND_LEADERS = new Set([
+    'npm',
+    'pnpm',
+    'yarn',
+    'cargo',
+    'go',
+    'pytest',
+    'poetry',
+    'uv',
+    'ruff',
+    'flake8',
+    'make',
+    'mypy',
+    'tsc',
+    'eslint',
+    'golangci-lint',
+]);
+// A command must start with a known leader (optionally via a runner like
+// `npm run`). We extract the backtick-wrapped contents first, then validate.
+const BACKTICK_GLOBAL = /`([^`]+)`/g;
+/**
+ * Extract the body lines of the verification section from an AGENTS.md content
+ * string. Returns the lines between the matching `## heading` and the next `##`
+ * heading (exclusive). Returns an empty array when no verification section is
+ * present.
+ */
+function extractVerificationLines(content) {
+    const lines = content.split('\n');
+    const body = [];
+    let inSection = false;
+    for (const line of lines) {
+        const headingMatch = line.match(/^##\s+(.+?)\s*$/);
+        if (headingMatch) {
+            if (inSection)
+                break; // reached the next section
+            inSection = VERIFICATION_HEADING.test(headingMatch[1]);
+            continue;
+        }
+        if (inSection)
+            body.push(line);
+    }
+    return body;
+}
+/**
+ * Normalize a raw backtick command into the canonical command we would run in a
+ * hook, or null if it is not a recognized verifiable command.
+ *
+ * Examples:
+ *   "npm test"            -> "npm test"
+ *   "npm run build"       -> "npm run build"
+ *   "cargo test --release"-> "cargo test --release"
+ *   "see the docs"        -> null
+ */
+function normalizeCommand(raw) {
+    const trimmed = raw.trim().replace(/\s+/g, ' ');
+    if (!trimmed)
+        return null;
+    const tokens = trimmed.split(' ');
+    const leader = tokens[0].toLowerCase();
+    if (!KNOWN_COMMAND_LEADERS.has(leader))
+        return null;
+    // Guard against accidental matches like a bare tool name with no action
+    // (e.g. just `npm`), which is not a meaningful hook command.
+    if (tokens.length < 2 && leader !== 'pytest' && leader !== 'flake8') {
+        return null;
+    }
+    return trimmed;
+}
+/**
+ * Parse the Verification section of an AGENTS.md content string and return
+ * suggested Claude Code hooks. Each recognized verification command becomes a
+ * Stop-hook suggestion. Duplicate commands are de-duplicated.
+ */
+function suggestHooks(content) {
+    const suggestions = [];
+    const seen = new Set();
+    const verificationLines = extractVerificationLines(content);
+    if (verificationLines.length === 0)
+        return suggestions;
+    for (const line of verificationLines) {
+        for (const match of line.matchAll(BACKTICK_GLOBAL)) {
+            const command = normalizeCommand(match[1]);
+            if (!command || seen.has(command))
+                continue;
+            seen.add(command);
+            suggestions.push({
+                hookType: 'Stop',
+                command,
+                description: `Run \`${command}\` automatically when the agent finishes (it's part of your Verification section)`,
+            });
+        }
+    }
+    return suggestions;
+}
+/**
+ * Render the suggested hooks as a `.claude/settings.json` snippet so users can
+ * copy it directly. Returns null when there are no suggestions. All matching
+ * commands are combined into a single Stop hook (chained with `&&`) since
+ * Claude Code runs one command per hook entry.
+ */
+function renderHookSettings(suggestions) {
+    if (suggestions.length === 0)
+        return null;
+    const command = suggestions.map((s) => s.command).join(' && ');
+    const settings = {
+        hooks: {
+            Stop: [
+                {
+                    hooks: [
+                        {
+                            type: 'command',
+                            command,
+                        },
+                    ],
+                },
+            ],
+        },
+    };
+    return JSON.stringify(settings, null, 2);
+}
+
+
+/***/ }),
+
 /***/ 9407:
 /***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
@@ -25938,15 +26857,51 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 const core = __importStar(__nccwpck_require__(7484));
+const fs = __importStar(__nccwpck_require__(9896));
 const check_js_1 = __nccwpck_require__(5883);
+const discover_js_1 = __nccwpck_require__(9164);
 const safety_js_1 = __nccwpck_require__(2617);
 const score_js_1 = __nccwpck_require__(9);
+const diff_js_1 = __nccwpck_require__(9952);
+const config_js_1 = __nccwpck_require__(2973);
 async function run() {
     try {
         const config = getConfig();
-        const agentsResult = (0, check_js_1.checkAgentsFile)(config.agentsPath);
+        // Optional .aikconfig.json — tunes line thresholds and safety rules.
+        // Absent file yields {} (defaults). Validation warnings are surfaced via
+        // core.warning so they appear in the Action log without failing the run.
+        const { config: aik, warnings: aikWarnings } = (0, config_js_1.loadConfig)();
+        for (const warning of aikWarnings)
+            core.warning(`config: ${warning}`);
+        const agentsFileCount = (0, discover_js_1.discoverAgentsFiles)('.').length;
+        const agentsResult = (0, check_js_1.checkAgentsFile)(config.agentsPath, {
+            agentsFileCount,
+            lineWarnThreshold: aik.check?.lineWarnThreshold,
+            lineErrorThreshold: aik.check?.lineErrorThreshold,
+        });
         const claudeResult = (0, check_js_1.checkClaudeFile)(config.claudePath, config.agentsPath);
-        const safetyResult = (0, safety_js_1.runSafetyCheck)(config.agentsPath);
+        // GEMINI.md is optional — only validate it when the file is present.
+        const geminiResult = fs.existsSync(config.geminiPath)
+            ? (0, check_js_1.checkGeminiFile)(config.geminiPath, config.agentsPath)
+            : null;
+        const consistencyResult = (0, check_js_1.checkCrossFileConsistency)(config.agentsPath, config.claudePath, config.geminiPath);
+        // Full-file safety result is always used for scoring so diff mode never
+        // inflates the grade by hiding pre-existing issues.
+        const safetyResult = (0, safety_js_1.runSafetyCheck)(config.agentsPath, '.aikignore', undefined, aik.safety);
+        // Diff-aware safety: when enabled, the CI safety report is filtered to lines
+        // changed in the current git diff. Falls back to the full result (with a
+        // warning) when git is unavailable. Default 'off' keeps existing behavior.
+        let safetyReport = safetyResult;
+        if (config.diffMode === 'force') {
+            const diff = (0, diff_js_1.getGitDiff)('.');
+            if (diff.error) {
+                core.warning(`--diff (diff_mode) disabled: ${diff.error}. Scanning full file.`);
+            }
+            else {
+                const changedLines = (0, diff_js_1.changedLinesForFile)(diff.ranges, config.agentsPath);
+                safetyReport = (0, safety_js_1.runSafetyCheck)(config.agentsPath, '.aikignore', changedLines, aik.safety);
+            }
+        }
         let checkPassed = true;
         let safetyPassed = true;
         let totalWarnings = 0;
@@ -25969,10 +26924,25 @@ async function run() {
             }
             if (!claudeResult.passed)
                 checkPassed = false;
+            if (geminiResult) {
+                core.info(`Checking ${config.geminiPath}...`);
+                for (const error of geminiResult.errors)
+                    core.error(error);
+                for (const warning of geminiResult.warnings) {
+                    core.warning(warning);
+                    totalWarnings++;
+                }
+                if (!geminiResult.passed)
+                    checkPassed = false;
+            }
+            for (const issue of consistencyResult.issues) {
+                core.warning(`[${issue.type}] ${issue.message}`);
+                totalWarnings++;
+            }
         }
         if (config.mode === 'safety' || config.mode === 'all') {
             core.info(`Running safety check on ${config.agentsPath}...`);
-            for (const finding of safetyResult.findings) {
+            for (const finding of safetyReport.findings) {
                 const msg = `[${finding.ruleId}] Line ${finding.line}: ${finding.message}`;
                 if (finding.severity === 'error') {
                     if (config.failOnSafety) {
@@ -25987,10 +26957,10 @@ async function run() {
                 }
                 totalWarnings++;
             }
-            if (!safetyResult.passed && config.failOnSafety)
+            if (!safetyReport.passed && config.failOnSafety)
                 safetyPassed = false;
         }
-        const scoreResult = (0, score_js_1.computeScore)(agentsResult, claudeResult, safetyResult);
+        const scoreResult = (0, score_js_1.computeScore)(agentsResult, claudeResult, safetyResult, undefined, geminiResult, consistencyResult);
         core.setOutput('check_passed', (config.mode === 'check' || config.mode === 'all') ? checkPassed.toString() : 'skipped');
         core.setOutput('safety_passed', (config.mode === 'safety' || config.mode === 'all') ? safetyPassed.toString() : 'skipped');
         core.setOutput('warnings', totalWarnings.toString());
@@ -26025,12 +26995,24 @@ function getConfig() {
     if (template !== 'minimal' && template !== 'opinionated') {
         throw new Error(`Invalid template: ${template}. Must be minimal or opinionated.`);
     }
+    // diff_mode accepts 'off' (default), 'force', or the boolean-ish 'true'/'false'
+    // for ergonomics. 'true' is an alias for 'force'.
+    const rawDiff = (core.getInput('diff_mode') || 'off').toLowerCase();
+    let diffMode = 'off';
+    if (rawDiff === 'force' || rawDiff === 'true') {
+        diffMode = 'force';
+    }
+    else if (rawDiff !== 'off' && rawDiff !== 'false' && rawDiff !== '') {
+        throw new Error(`Invalid diff_mode: ${rawDiff}. Must be off or force (true/false accepted).`);
+    }
     return {
         mode,
         template,
         failOnSafety: core.getInput('fail_on_safety') === 'true',
         agentsPath: core.getInput('agents_path') || 'AGENTS.md',
         claudePath: core.getInput('claude_path') || 'CLAUDE.md',
+        geminiPath: core.getInput('gemini_path') || 'GEMINI.md',
+        diffMode,
     };
 }
 run();
@@ -26080,6 +27062,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.runSafetyCheck = runSafetyCheck;
 exports.getSafetyRules = getSafetyRules;
 const fs = __importStar(__nccwpck_require__(9896));
+const config_js_1 = __nccwpck_require__(2973);
 const SAFETY_RULES = [
     {
         id: 'ignore-instructions',
@@ -26200,19 +27183,58 @@ function loadIgnoredRules(ignorePath) {
         .map((line) => line.trim())
         .filter((line) => line.length > 0 && !line.startsWith('#')));
 }
-function runSafetyCheck(path, ignorePath = '.aikignore') {
+// Build the effective rule set from the built-in rules plus optional config:
+//   - severityOverrides remap a built-in rule's severity ('off' drops it),
+//   - customRules are appended (a custom rule whose id matches a built-in rule
+//     overrides that built-in — custom takes precedence),
+//   - rules listed in `ignored` (from .aikignore + config.ignoreRules) are
+//     dropped entirely.
+// Invalid custom patterns are silently skipped here; loadConfig already
+// surfaced a warning for them at load time.
+function buildEffectiveRules(ignored, config) {
+    const overrides = config?.severityOverrides ?? {};
+    const byId = new Map();
+    for (const rule of SAFETY_RULES) {
+        const override = overrides[rule.id];
+        if (override === 'off')
+            continue;
+        byId.set(rule.id, override ? { ...rule, severity: override } : rule);
+    }
+    for (const custom of config?.customRules ?? []) {
+        const pattern = (0, config_js_1.compileCustomPattern)(custom, []);
+        if (!pattern)
+            continue;
+        byId.set(custom.id, {
+            id: custom.id,
+            pattern,
+            message: custom.message,
+            severity: custom.severity ?? 'warn',
+        });
+    }
+    return [...byId.values()].filter((rule) => !ignored.has(rule.id));
+}
+// Optional `changedLines` restricts findings to the given 1-based line numbers
+// (diff-aware mode). When omitted, every line in the file is scanned. This
+// keeps the signature backward compatible — existing callers pass only `path`
+// (and optionally `ignorePath`). `config` (from .aikconfig.json) is also
+// optional; when absent the built-in rules run unchanged.
+function runSafetyCheck(path, ignorePath = '.aikignore', changedLines, config) {
     const findings = [];
     if (!fs.existsSync(path)) {
         return { passed: true, findings: [] };
     }
     const ignored = loadIgnoredRules(ignorePath);
+    for (const id of config?.ignoreRules ?? [])
+        ignored.add(id);
+    const rules = buildEffectiveRules(ignored, config);
     const content = fs.readFileSync(path, 'utf-8');
     const lines = content.split('\n');
     for (let i = 0; i < lines.length; i++) {
+        // Diff-aware mode: skip lines that weren't changed in the current diff.
+        if (changedLines && !changedLines.has(i + 1))
+            continue;
         const line = lines[i];
-        for (const rule of SAFETY_RULES) {
-            if (ignored.has(rule.id))
-                continue;
+        for (const rule of rules) {
             if (rule.pattern.test(line)) {
                 findings.push({
                     ruleId: rule.id,
@@ -26242,9 +27264,36 @@ function getSafetyRules() {
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.estimateTokens = estimateTokens;
+exports.computeTokenBudget = computeTokenBudget;
 exports.computeScore = computeScore;
+exports.badgeUrl = badgeUrl;
+exports.generateBadgeMarkdown = generateBadgeMarkdown;
+exports.generateBadgeSvg = generateBadgeSvg;
+exports.generateBadge = generateBadge;
 const CLARITY_RULE_IDS = new Set(['ambiguous-hedge', 'vague-persona']);
-function computeScore(agentsCheck, claudeCheck, safetyResult) {
+// Rough heuristic: ~4 characters per token. Actual token counts vary by content
+// (code is denser than prose), so this is an estimate, not an exact measure.
+const CHARS_PER_TOKEN = 4;
+// Typical context window used as the reference for budget percentages.
+const CONTEXT_WINDOW_TOKENS = 100_000;
+// Warn when instruction files consume more than this share of the window.
+const WARNING_THRESHOLD_PERCENT = 5;
+function estimateTokens(text) {
+    if (!text)
+        return 0;
+    return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+function computeTokenBudget(text) {
+    const estimatedTokens = estimateTokens(text);
+    const percentOfWindow = (estimatedTokens / CONTEXT_WINDOW_TOKENS) * 100;
+    return {
+        estimatedTokens,
+        percentOfWindow,
+        isWarning: percentOfWindow >= WARNING_THRESHOLD_PERCENT,
+    };
+}
+function computeScore(agentsCheck, claudeCheck, safetyResult, sourceText, geminiCheck, consistencyResult) {
     const breakdown = {};
     const suggestions = [];
     let structurePoints = 30;
@@ -26301,6 +27350,28 @@ function computeScore(agentsCheck, claudeCheck, safetyResult) {
     if (claudeCheck.warnings.some((w) => w.includes('contradict'))) {
         suggestions.push('Resolve contradictions between CLAUDE.md and AGENTS.md');
     }
+    if (geminiCheck) {
+        if (!geminiCheck.passed) {
+            consistencyPoints -= geminiCheck.errors.length * 10;
+            suggestions.push('Fix errors in GEMINI.md');
+        }
+        consistencyPoints -= geminiCheck.warnings.length * 5;
+        if (geminiCheck.warnings.some((w) => w.includes('reference AGENTS.md'))) {
+            suggestions.push('GEMINI.md should reference AGENTS.md as source of truth');
+        }
+        if (geminiCheck.warnings.some((w) => w.includes('contradict'))) {
+            suggestions.push('Resolve contradictions between GEMINI.md and AGENTS.md');
+        }
+    }
+    if (consistencyResult && consistencyResult.issues.length > 0) {
+        consistencyPoints -= consistencyResult.issues.length * 3;
+        if (consistencyResult.issues.some((i) => i.type === 'contradiction')) {
+            suggestions.push('Resolve cross-file contradictions across AGENTS.md / CLAUDE.md / GEMINI.md');
+        }
+        if (consistencyResult.issues.some((i) => i.type === 'duplication')) {
+            suggestions.push('Remove duplicated sections — keep shared content in AGENTS.md only');
+        }
+    }
     breakdown['Consistency'] = Math.max(0, consistencyPoints);
     const score = Math.max(0, Math.min(100, breakdown['Structure'] + breakdown['Safety'] + breakdown['Clarity'] + breakdown['Consistency']));
     let grade;
@@ -26314,7 +27385,84 @@ function computeScore(agentsCheck, claudeCheck, safetyResult) {
         grade = 'D';
     else
         grade = 'F';
-    return { score, grade, breakdown, suggestions };
+    const result = { score, grade, breakdown, suggestions };
+    if (sourceText !== undefined) {
+        const tokenBudget = computeTokenBudget(sourceText);
+        result.tokenBudget = tokenBudget;
+        if (tokenBudget.isWarning) {
+            suggestions.push(`Instruction files consume ~${tokenBudget.percentOfWindow.toFixed(1)}% of a ${formatWindowLabel()} context window — trim to free up tokens for the agent`);
+        }
+    }
+    return result;
+}
+function formatWindowLabel() {
+    return `${CONTEXT_WINDOW_TOKENS / 1000}k`;
+}
+// shields.io color names keyed by grade. These are the standard named colors
+// shields.io accepts directly in the badge URL.
+const GRADE_COLORS = {
+    A: 'brightgreen',
+    B: 'green',
+    C: 'yellow',
+    D: 'orange',
+    F: 'red',
+};
+function badgeColor(grade) {
+    return GRADE_COLORS[grade] ?? 'lightgrey';
+}
+// Escapes a value for a shields.io static badge path segment. Per shields.io,
+// literal dashes must be doubled and underscores/spaces have special meaning,
+// so encode the label/grade conservatively.
+function shieldsEscape(value) {
+    return value.replace(/-/g, '--').replace(/_/g, '__').replace(/ /g, '_');
+}
+function badgeUrl(grade) {
+    const label = shieldsEscape('agent-instructions');
+    const message = shieldsEscape(grade);
+    return `https://img.shields.io/badge/${label}-${message}-${badgeColor(grade)}`;
+}
+function generateBadgeMarkdown(grade) {
+    return `![Agent Instructions Score: ${grade}](${badgeUrl(grade)})`;
+}
+// Renders a self-contained SVG badge equivalent to the shields.io "flat" style,
+// so the badge can be committed/served without a network dependency.
+function generateBadgeSvg(grade) {
+    const label = 'agent-instructions';
+    const message = grade;
+    const color = SVG_COLORS[grade] ?? '#9f9f9f';
+    // Approximate width: ~7px per char + padding. Keeps text from clipping.
+    const labelWidth = label.length * 7 + 10;
+    const messageWidth = message.length * 7 + 10;
+    const totalWidth = labelWidth + messageWidth;
+    const labelMid = labelWidth / 2;
+    const messageMid = labelWidth + messageWidth / 2;
+    return [
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="20" role="img" aria-label="${label}: ${message}">`,
+        `<title>${label}: ${message}</title>`,
+        `<linearGradient id="s" x2="0" y2="100%"><stop offset="0" stop-color="#bbb" stop-opacity=".1"/><stop offset="1" stop-opacity=".1"/></linearGradient>`,
+        `<clipPath id="r"><rect width="${totalWidth}" height="20" rx="3" fill="#fff"/></clipPath>`,
+        `<g clip-path="url(#r)">`,
+        `<rect width="${labelWidth}" height="20" fill="#555"/>`,
+        `<rect x="${labelWidth}" width="${messageWidth}" height="20" fill="${color}"/>`,
+        `<rect width="${totalWidth}" height="20" fill="url(#s)"/>`,
+        `</g>`,
+        `<g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">`,
+        `<text x="${labelMid}" y="14">${label}</text>`,
+        `<text x="${messageMid}" y="14">${message}</text>`,
+        `</g>`,
+        `</svg>`,
+    ].join('');
+}
+// Hex equivalents of the shields.io named colors, used for self-contained SVGs.
+const SVG_COLORS = {
+    A: '#4c1',
+    B: '#97ca00',
+    C: '#dfb317',
+    D: '#fe7d37',
+    F: '#e05d44',
+};
+function generateBadge(grade, format = 'markdown') {
+    return format === 'svg' ? generateBadgeSvg(grade) : generateBadgeMarkdown(grade);
 }
 
 
