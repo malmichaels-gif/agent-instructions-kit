@@ -34,7 +34,7 @@
   "author": "malmichaels-gif",
   "license": "MIT",
   "dependencies": {
-    "@actions/core": "^1.11.1"
+    "@actions/core": "^3.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
