@@ -31,5 +31,8 @@ dist/**/*.d.ts.map
 *.tmp
 *.temp
 
+# Test scratch dirs (cli.test.ts best-effort cleanup can leave residue on Windows)
+test-fixtures-cli/
+
 # Claude Code
 .claude/

@@ -108,6 +108,9 @@ A task is not done until all of these pass:
 export const CLAUDE_TEMPLATE = `Follow AGENTS.md exactly. If AGENTS.md conflicts with any other instructions, AGENTS.md wins.
 `;
 
+export const GEMINI_TEMPLATE = `Follow AGENTS.md exactly. If AGENTS.md conflicts with any other instructions, AGENTS.md wins.
+`;
+
 export function getTemplate(name: 'minimal' | 'opinionated'): string {
   return name === 'minimal' ? MINIMAL_TEMPLATE : OPINIONATED_TEMPLATE;
 }
