@@ -49,5 +49,5 @@ outputs:
     description: 'Quality grade (A-F)'
 
 runs:
-  using: 'node20'
+  using: 'node24'
   main: 'dist/index.js'
