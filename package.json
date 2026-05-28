@@ -10,7 +10,7 @@
     "agent-instructions-kit": "dist/cli/index.js"
   },
   "scripts": {
-    "build": "ncc build src/index.ts -o dist --source-map --license licenses.txt && ncc build src/cli.ts -o dist/cli --source-map",
+    "build": "ncc build src/index.ts -o dist --source-map --license licenses.txt && ncc build src/cli.ts -o dist/cli --source-map && node scripts/normalize-dist.mjs",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
